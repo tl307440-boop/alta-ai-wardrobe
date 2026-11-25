@@ -56,11 +56,6 @@ function closeStudio() {
   }
 }
 
-function openStandaloneWindow() {
-  const url = `${window.location.origin}/lookbook?mode=collage&planId=${props.plan.id}&studio=1`;
-  window.open(url, '_blank', 'noopener');
-}
-
 interface DragState {
   nodeKey: string;
   startClientX: number;
@@ -444,36 +439,12 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
 
 <template>
   <div class="space-y-3">
-    <!-- Studio Launch Banner (Solves narrow embedded box pain point) -->
-    <div class="rounded-2xl bg-[#FAFAFA] border border-black/[0.08] px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
-      <div class="flex items-center gap-2 text-[12px] text-[#555555]">
-        <span class="px-2 py-0.5 rounded bg-black text-white font-mono text-[10px] tracking-wider">STUDIO</span>
-        <span>打开全屏工作台可自由拖入全衣橱单品、配饰耳饰、切换画幅纸张与无级旋转</span>
-      </div>
-      <div class="flex items-center gap-1.5">
-        <button
-          type="button"
-          @click="openStudio"
-          class="px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition flex items-center gap-1.5 shadow-sm"
-        >
-          <AppIcon name="maximize" :size="13" />
-          进入全屏工作台
-        </button>
-        <button
-          type="button"
-          @click="openStandaloneWindow"
-          title="在浏览器新窗口独立打开大画板"
-          class="px-2.5 py-1.5 rounded-full bg-white hover:bg-[#EFEFEF] border border-black/15 text-black text-[11.5px] font-medium transition flex items-center gap-1"
-        >
-          <AppIcon name="external-link" :size="12" />
-          独立窗口
-        </button>
-      </div>
-    </div>
-
-    <!-- Compact Quick Actions -->
+    <!-- Top Canvas Control Strip -->
     <div class="flex flex-wrap items-center justify-between gap-2 text-[12px]">
-      <span class="text-[#666666] text-[11.5px]">双击画布空白处也可快速展开全屏工作台</span>
+      <div class="flex items-center gap-1.5 text-[#666666]">
+        <AppIcon name="move" :size="14" class="text-black" />
+        <span>按住衣物自由拖拽 · 点击选中后可缩放、旋转或调整叠穿层级</span>
+      </div>
       <div class="flex items-center gap-1.5">
         <button
           type="button"
@@ -526,14 +497,14 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         ALTA FLAT-LAY STUDIO · {{ nodes.length }} PIECES
       </div>
 
-      <!-- Top-Right Expand Trigger inside Canvas -->
+      <!-- Single Clean Full-Screen Studio Entry Button -->
       <button
         type="button"
         @click.stop="openStudio"
-        class="absolute top-3 right-3 z-[40] px-3 py-1.5 rounded-full bg-white/90 hover:bg-black hover:text-white border border-black/15 text-[11.5px] font-medium text-black shadow-sm backdrop-blur transition flex items-center gap-1.5"
+        class="absolute top-3 right-3 z-[40] px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-[11.5px] font-medium text-white shadow-sm transition flex items-center gap-1.5"
       >
         <AppIcon name="maximize" :size="12" />
-        放大全屏拼贴
+        全屏工作台
       </button>
 
       <div class="pointer-events-none absolute bottom-3.5 right-4 text-[10px] font-mono text-black/30">

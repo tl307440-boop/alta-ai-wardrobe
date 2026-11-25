@@ -615,11 +615,6 @@ function handleSave() {
   hasUnsavedChanges.value = false;
 }
 
-function openStandaloneTab() {
-  const url = `${window.location.origin}/lookbook?mode=collage&planId=${props.plan.id}&studio=1`;
-  window.open(url, '_blank', 'noopener');
-}
-
 function onKeyDown(e: KeyboardEvent) {
   if (!props.open) return;
   const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
@@ -819,23 +814,13 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
             <span class="px-2 py-0.5 rounded bg-black text-white font-mono text-[10px] tracking-wider uppercase shrink-0">
               STUDIO
             </span>
-            <h2 class="text-[14px] font-semibold text-black truncate max-w-[220px]">
+            <h2 class="text-[14px] font-semibold text-black truncate max-w-[240px]">
               {{ plan.themeTitle }}
             </h2>
             <span class="font-mono text-[11px] text-[#666666] shrink-0">
               {{ nodes.length }} 件元素
             </span>
           </div>
-
-          <button
-            type="button"
-            @click="openStandaloneTab"
-            title="在浏览器独立新标签窗口中打开此画板"
-            class="hidden md:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#F5F5F5] hover:bg-black hover:text-white text-[11.5px] text-[#444444] transition shrink-0"
-          >
-            <AppIcon name="external-link" :size="12" />
-            独立新窗口
-          </button>
         </div>
 
         <!-- Center: Undo/Redo + Layout Templates + Aspect Ratio + Zoom -->
@@ -922,25 +907,8 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
           </div>
         </div>
 
-        <!-- Right: Panel Toggles + Save + Export -->
+        <!-- Right: Save + Export -->
         <div class="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            @click="leftOpen = !leftOpen"
-            class="hidden md:inline-flex px-2.5 py-1.5 rounded-full border text-[11.5px] transition"
-            :class="leftOpen ? 'border-black/15 bg-[#F5F5F5] text-black' : 'border-black/10 bg-white text-[#666666]'"
-          >
-            衣橱栏
-          </button>
-          <button
-            type="button"
-            @click="rightOpen = !rightOpen"
-            class="hidden md:inline-flex px-2.5 py-1.5 rounded-full border text-[11.5px] transition"
-            :class="rightOpen ? 'border-black/15 bg-[#F5F5F5] text-black' : 'border-black/10 bg-white text-[#666666]'"
-          >
-            图层栏
-          </button>
-
           <button
             type="button"
             @click="handleSave"
@@ -969,38 +937,58 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
       </header>
 
       <!-- Main 3-Column Studio Body -->
-      <div class="flex-1 min-h-0 flex overflow-hidden">
-        <!-- LEFT PANE: Closet & Studio Accessory Drawer (Polyvore / ShopLook Pattern) -->
+      <div class="flex-1 min-h-0 flex overflow-hidden relative">
+        <!-- LEFT PANE: Closet & Studio Accessory Drawer -->
         <aside
           v-if="leftOpen"
-          class="w-64 sm:w-72 border-r border-black/[0.08] bg-white flex flex-col shrink-0 min-h-0"
+          class="relative w-64 sm:w-72 border-r border-black/[0.08] bg-white flex flex-col shrink-0 min-h-0 z-20"
         >
-          <!-- Drawer Tabs -->
+          <!-- Edge Collapse Handle (Middle Right of Left Sidebar) -->
+          <button
+            type="button"
+            @click="leftOpen = false"
+            title="收起衣橱侧栏"
+            class="absolute top-1/2 -right-3 -translate-y-1/2 z-30 w-6 h-12 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 shadow-sm flex items-center justify-center text-[#555555] transition"
+          >
+            <AppIcon name="chevron-left" :size="13" />
+          </button>
+
+          <!-- Drawer Tabs + Collapse Icon -->
           <div class="p-3 border-b border-black/[0.06] space-y-2.5">
-            <div class="grid grid-cols-3 p-0.5 rounded-full bg-[#F2F2F2] text-[11.5px] font-medium">
+            <div class="flex items-center gap-1.5">
+              <div class="flex-1 grid grid-cols-3 p-0.5 rounded-full bg-[#F2F2F2] text-[11.5px] font-medium">
+                <button
+                  type="button"
+                  @click="drawerTab = 'wardrobe'"
+                  class="py-1.5 rounded-full transition"
+                  :class="drawerTab === 'wardrobe' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
+                >
+                  我的衣橱
+                </button>
+                <button
+                  type="button"
+                  @click="drawerTab = 'accessories'"
+                  class="py-1.5 rounded-full transition"
+                  :class="drawerTab === 'accessories' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
+                >
+                  百搭配饰
+                </button>
+                <button
+                  type="button"
+                  @click="drawerTab = 'text'"
+                  class="py-1.5 rounded-full transition"
+                  :class="drawerTab === 'text' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
+                >
+                  杂志字贴
+                </button>
+              </div>
               <button
                 type="button"
-                @click="drawerTab = 'wardrobe'"
-                class="py-1.5 rounded-full transition"
-                :class="drawerTab === 'wardrobe' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
+                @click="leftOpen = false"
+                title="收起左侧衣橱栏"
+                class="w-7 h-7 rounded-full hover:bg-[#F2F2F2] flex items-center justify-center text-[#555555] hover:text-black transition shrink-0"
               >
-                我的衣橱
-              </button>
-              <button
-                type="button"
-                @click="drawerTab = 'accessories'"
-                class="py-1.5 rounded-full transition"
-                :class="drawerTab === 'accessories' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
-              >
-                百搭配饰
-              </button>
-              <button
-                type="button"
-                @click="drawerTab = 'text'"
-                class="py-1.5 rounded-full transition"
-                :class="drawerTab === 'text' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
-              >
-                杂志字贴
+                <AppIcon name="panel-left-close" :size="15" />
               </button>
             </div>
 
@@ -1129,6 +1117,29 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
           @click.self="selectedKey = null"
           class="flex-1 min-w-0 bg-[#F2F2F2] overflow-auto flex items-center justify-center p-4 sm:p-8 relative"
         >
+          <!-- Floating Left Reopen Trigger when Left Sidebar is Collapsed -->
+          <button
+            v-if="!leftOpen"
+            type="button"
+            @click="leftOpen = true"
+            title="展开衣橱侧栏"
+            class="absolute top-4 left-4 z-30 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 shadow-sm text-[12px] font-medium text-black transition"
+          >
+            <AppIcon name="panel-left-open" :size="14" />
+            衣橱
+          </button>
+
+          <!-- Floating Right Reopen Trigger when Right Sidebar is Collapsed -->
+          <button
+            v-if="!rightOpen"
+            type="button"
+            @click="rightOpen = true"
+            title="展开属性与图层侧栏"
+            class="absolute top-4 right-4 z-30 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 shadow-sm text-[12px] font-medium text-black transition"
+          >
+            属性与图层
+            <AppIcon name="panel-right-open" :size="14" />
+          </button>
           <!-- Scaled Editorial Artboard -->
           <div
             ref="artboardRef"
@@ -1275,13 +1286,34 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         <!-- RIGHT PANE: Precision Inspector, Backdrops & Visual Layer Stack -->
         <aside
           v-if="rightOpen"
-          class="w-64 sm:w-72 border-l border-black/[0.08] bg-white flex flex-col shrink-0 min-h-0 overflow-y-auto"
+          class="relative w-64 sm:w-72 border-l border-black/[0.08] bg-white flex flex-col shrink-0 min-h-0 z-20"
         >
+          <!-- Edge Collapse Handle (Middle Left of Right Sidebar) -->
+          <button
+            type="button"
+            @click="rightOpen = false"
+            title="收起属性与图层侧栏"
+            class="absolute top-1/2 -left-3 -translate-y-1/2 z-30 w-6 h-12 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 shadow-sm flex items-center justify-center text-[#555555] transition"
+          >
+            <AppIcon name="chevron-right" :size="13" />
+          </button>
+
+          <div class="flex-1 overflow-y-auto flex flex-col">
           <!-- Section 1: Selected Element Inspector -->
           <div class="p-4 border-b border-black/[0.07] space-y-3">
             <div class="flex items-center justify-between">
               <span class="text-[11px] font-mono uppercase tracking-wider text-[#777777]">选中单品属性</span>
-              <span v-if="selectedNode" class="font-mono text-[11px] text-black">层 #{{ selectedNode.zIndex }}</span>
+              <div class="flex items-center gap-1.5">
+                <span v-if="selectedNode" class="font-mono text-[11px] text-black">层 #{{ selectedNode.zIndex }}</span>
+                <button
+                  type="button"
+                  @click="rightOpen = false"
+                  title="收起右侧属性栏"
+                  class="w-7 h-7 rounded-full hover:bg-[#F2F2F2] flex items-center justify-center text-[#555555] hover:text-black transition"
+                >
+                  <AppIcon name="panel-right-close" :size="15" />
+                </button>
+              </div>
             </div>
 
             <template v-if="selectedNode && selectedVisual">
@@ -1476,6 +1508,7 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
                 </div>
               </div>
             </div>
+          </div>
           </div>
         </aside>
       </div>
