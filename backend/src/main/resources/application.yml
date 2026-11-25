@@ -1,0 +1,41 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ai-wardrobe-backend
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  servlet:
+    multipart:
+      max-file-size: 12MB
+      max-request-size: 25MB
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+
+app:
+  jwt:
+    secret: ${APP_JWT_SECRET:AIWardrobeEditorialSecretKey2026SpringBootVue3MySQL8JwtAuth!}
+    expiration-days: 7
+  crypto:
+    secret: ${APP_CRYPTO_SECRET:AIWardrobeAesGcmKeyMasterSecret2026!}
+  storage:
+    upload-dir: ${APP_UPLOAD_DIR:./uploads}
+  ai:
+    connect-timeout-ms: 5000
+    read-timeout-ms: 30000
+    image-timeout-ms: 120000
+    default-base-url: ${APP_AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    default-api-key: ${APP_AI_API_KEY:}
+    default-vision-model: ${APP_AI_VISION_MODEL:qwen-vl-max}
+    default-chat-model: ${APP_AI_CHAT_MODEL:qwen-plus}
+  weather:
+    timeout-ms: 5000
+    cache-minutes: 30

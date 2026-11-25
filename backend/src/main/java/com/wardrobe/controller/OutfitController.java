@@ -1,0 +1,128 @@
+package com.wardrobe.controller;
+
+import com.wardrobe.common.Result;
+import com.wardrobe.model.dto.OutfitDto;
+import com.wardrobe.security.UserContextHolder;
+import com.wardrobe.service.CommerceMatchService;
+import com.wardrobe.service.OutfitRecommendationService;
+import com.wardrobe.service.TryOnJobService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api")
+@RequiredArgsConstructor
+public class OutfitController {
+    private final OutfitRecommendationService outfitService;
+    private final TryOnJobService tryOnJobService;
+    private final CommerceMatchService commerceMatchService;
+
+    @PostMapping("/outfit/recommend")
+    public Result<OutfitDto.PlanVo> recommend(@RequestBody(required = false) OutfitDto.RecommendRequest req) {
+        OutfitDto.RecommendRequest body = req != null ? req : new OutfitDto.RecommendRequest();
+        return Result.ok(outfitService.recommend(UserContextHolder.getUserId(), body));
+    }
+
+    @PostMapping("/outfit/plans/{id}/swap-slot")
+    public Result<OutfitDto.PlanVo> swapSlot(@PathVariable Long id, @RequestBody OutfitDto.SwapSlotRequest req) {
+        return Result.ok(outfitService.swapSlot(UserContextHolder.getUserId(), id, req));
+    }
+
+    @PutMapping("/outfit/plans/{id}/collage-layout")
+    public Result<OutfitDto.PlanVo> saveCollageLayout(@PathVariable Long id,
+                                                      @RequestBody OutfitDto.SaveCollageLayoutRequest req) {
+        return Result.ok("自由拼贴画板排版已保存",
+                outfitService.saveCollageLayout(UserContextHolder.getUserId(), id, req));
+    }
+
+    @PostMapping("/outfit/plans/{id}/try-on")
+    public Result<OutfitDto.TryOnResultVo> generateTryOn(@PathVariable Long id,
+                                                         @RequestBody(required = false) OutfitDto.TryOnRequest req) {
+        OutfitDto.TryOnRequest body = req != null ? req : new OutfitDto.TryOnRequest();
+        return Result.ok(outfitService.generateTryOnPreview(UserContextHolder.getUserId(), id, body));
+    }
+
+    @PostMapping("/outfit/plans/{id}/try-on/jobs")
+    public Result<OutfitDto.TryOnJobVo> submitTryOnJob(@PathVariable Long id,
+                                                       @RequestBody(required = false) OutfitDto.TryOnRequest req) {
+        return Result.ok("已提交后台生图任务",
+                tryOnJobService.submitJob(UserContextHolder.getUserId(), id, req));
+    }
+
+    @GetMapping("/outfit/try-on/jobs")
+    public Result<List<OutfitDto.TryOnJobVo>> listTryOnJobs(
+            @RequestParam(required = false) Long planId,
+            @RequestParam(defaultValue = "18") int limit) {
+        return Result.ok(tryOnJobService.listJobs(UserContextHolder.getUserId(), planId, limit));
+    }
+
+    @GetMapping("/outfit/try-on/jobs/{jobId}")
+    public Result<OutfitDto.TryOnJobVo> getTryOnJob(@PathVariable Long jobId) {
+        return Result.ok(tryOnJobService.getJob(UserContextHolder.getUserId(), jobId));
+    }
+
+    @PostMapping("/outfit/try-on/jobs/{jobId}/apply-cover")
+    public Result<OutfitDto.PlanVo> applyTryOnJobCover(@PathVariable Long jobId,
+                                                       @RequestParam(required = false) Long planId) {
+        return Result.ok("已设为当前穿搭方案预览封面",
+                tryOnJobService.applyJobAsCover(UserContextHolder.getUserId(), jobId, planId));
+    }
+
+    @DeleteMapping("/outfit/try-on/jobs/{jobId}")
+    public Result<Void> deleteTryOnJob(@PathVariable Long jobId) {
+        tryOnJobService.deleteJob(UserContextHolder.getUserId(), jobId);
+        return Result.ok();
+    }
+
+    @GetMapping("/outfit/plans/{id}")
+    public Result<OutfitDto.PlanVo> getPlan(@PathVariable Long id) {
+        return Result.ok(outfitService.getPlanById(UserContextHolder.getUserId(), id));
+    }
+
+    @GetMapping("/outfit/plans")
+    public Result<List<OutfitDto.PlanVo>> listPlans(@RequestParam(defaultValue = "false") boolean favoriteOnly) {
+        return Result.ok(outfitService.listPlans(UserContextHolder.getUserId(), favoriteOnly));
+    }
+
+    @PatchMapping("/outfit/plans/{id}/favorite")
+    public Result<OutfitDto.PlanVo> toggleFavorite(@PathVariable Long id) {
+        return Result.ok(outfitService.toggleFavorite(UserContextHolder.getUserId(), id));
+    }
+
+    @PostMapping("/outfit/plans/{id}/dislike")
+    public Result<OutfitDto.PlanVo> dislikePlan(@PathVariable Long id) {
+        return Result.ok("已记录避雷偏好并为你重新生成替代方案",
+                outfitService.dislikePlan(UserContextHolder.getUserId(), id));
+    }
+
+    @DeleteMapping("/outfit/plans/{id}")
+    public Result<Void> deletePlan(@PathVariable Long id) {
+        outfitService.deletePlan(UserContextHolder.getUserId(), id);
+        return Result.ok();
+    }
+
+    @GetMapping("/outfit/history")
+    public Result<List<OutfitDto.HistoryVo>> listHistory(@RequestParam(required = false) String month) {
+        return Result.ok(outfitService.listHistory(UserContextHolder.getUserId(), month));
+    }
+
+    @PostMapping("/outfit/history")
+    public Result<OutfitDto.HistoryVo> recordHistory(@RequestBody OutfitDto.RecordHistoryRequest req) {
+        return Result.ok(outfitService.recordHistory(UserContextHolder.getUserId(), req));
+    }
+
+    @PutMapping("/outfit/history/{id}")
+    public Result<OutfitDto.HistoryVo> updateHistory(@PathVariable Long id, @RequestBody OutfitDto.UpdateHistoryRequest req) {
+        return Result.ok(outfitService.updateHistory(UserContextHolder.getUserId(), id, req));
+    }
+
+    @GetMapping("/products")
+    public Result<List<OutfitDto.ProductVo>> listProducts(
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) BigDecimal maxPrice) {
+        return Result.ok(commerceMatchService.listAll(category, maxPrice));
+    }
+}

@@ -1,0 +1,32 @@
+# Secrets & Environment (NEVER commit real credentials)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+
+# Backend build & runtime data
+backend/target/
+backend/data/
+backend/uploads/
+*.log
+
+# Frontend dependencies & build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Personal local reference images in workspace root
+微信图片_*.png
+微信图片_*.jpg
+模特*.png
+模特*.jpg
+
+# IDE & OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

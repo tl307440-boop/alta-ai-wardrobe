@@ -1,0 +1,81 @@
+# ALTA · 智搭衣橱 — Production Docker Compose (Tuned for 2 vCPU / 2GB RAM Coexistence)
+# Secrets live ONLY in /opt/alta_wardrobe/.env on the server (never committed to Git).
+
+name: alta_wardrobe
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Please set MYSQL_ROOT_PASSWORD in /opt/alta_wardrobe/.env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ai_wardrobe}
+      MYSQL_USER: ${MYSQL_USER:-wardrobe}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Please set MYSQL_PASSWORD in /opt/alta_wardrobe/.env}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --performance-schema=OFF
+      - --innodb-buffer-pool-size=48M
+      - --innodb-log-buffer-size=4M
+      - --max-connections=30
+      - --table-open-cache=128
+      - --table-definition-cache=256
+      - --key-buffer-size=4M
+      - --host-cache-size=0
+      - --mysqlx=0
+    volumes:
+      - alta_mysql_data:/var/lib/mysql
+    mem_limit: 384m
+    memswap_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 8s
+      timeout: 5s
+      retries: 20
+      start_period: 25s
+
+  backend:
+    image: alta-wardrobe-backend:latest
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: mysql
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: ${MYSQL_DATABASE:-ai_wardrobe}
+      MYSQL_USER: ${MYSQL_USER:-wardrobe}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Please set MYSQL_PASSWORD in /opt/alta_wardrobe/.env}
+      APP_JWT_SECRET: ${APP_JWT_SECRET:?Please set APP_JWT_SECRET in /opt/alta_wardrobe/.env}
+      APP_CRYPTO_SECRET: ${APP_CRYPTO_SECRET:?Please set APP_CRYPTO_SECRET in /opt/alta_wardrobe/.env}
+      APP_UPLOAD_DIR: /app/uploads
+      TZ: Asia/Shanghai
+      JAVA_OPTS: "-XX:+UseSerialGC -Xms64m -Xmx224m -XX:MaxMetaspaceSize=112m -Xss512k -XX:MinHeapFreeRatio=15 -XX:MaxHeapFreeRatio=35 -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+    mem_limit: 384m
+    memswap_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health | grep -q '\"UP\"'"]
+      interval: 8s
+      timeout: 5s
+      retries: 20
+      start_period: 25s
+
+  web:
+    image: alta-wardrobe-web:latest
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8680}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 64m
+    memswap_limit: 128m
+
+volumes:
+  alta_mysql_data:

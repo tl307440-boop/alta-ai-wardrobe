@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:ai_wardrobe}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:wardrobe}
+    password: ${MYSQL_PASSWORD:wardrobe2026}
+    hikari:
+      minimum-idle: 2
+      maximum-pool-size: 6
+      idle-timeout: 120000
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:sql/schema-mysql.sql
