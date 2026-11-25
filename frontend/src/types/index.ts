@@ -297,6 +297,44 @@ export interface ItemRecognitionResult {
   notice?: string;
 }
 
+/** Fractions of the source image (0..1), origin = top-left. */
+export interface BoundingBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface DetectedItem {
+  name: string;
+  category: string;
+  subCategory?: string;
+  color: string;
+  colorHex: string;
+  seasons: string[];
+  thickness?: number;
+  styleTags: string[];
+  material?: string;
+  svgType: string;
+  bbox: BoundingBox | null;
+  similarWardrobeName: string | null;
+  similarity: number;
+  aiRawResult?: string;
+}
+
+export interface ItemsDetectionResult {
+  originalImageUrl: string | null;
+  items: DetectedItem[];
+  usedRealLlm: boolean;
+  notice?: string;
+}
+
+export interface StoredItemImage {
+  originalImageUrl: string;
+  processedImageUrl: string;
+  cutoutFallback: boolean;
+}
+
 export interface InspirationItemMatch {
   slotLabel: string;
   name: string;

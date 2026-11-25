@@ -27,14 +27,6 @@ const todayStr = computed(() => {
   return `${y}-${m}-${d}`;
 });
 
-const monthLabelEn = computed(() => {
-  const names = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
-  ];
-  return `${names[viewMonth.value - 1]} ${viewYear.value}`;
-});
-
 const calendarCells = computed(() => {
   const firstDow = new Date(viewYear.value, viewMonth.value - 1, 1).getDay();
   const daysInMonth = new Date(viewYear.value, viewMonth.value, 0).getDate();
@@ -110,60 +102,67 @@ function openLookInEngine(plan: OutfitPlanVo) {
 <template>
   <section class="space-y-5">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <div class="inline-flex p-1 rounded-2xl bg-oat-200/80 border border-oat-300">
+      <div class="inline-flex p-1 rounded-full bg-[#F5F5F5]" role="tablist">
         <button
+          role="tab"
+          :aria-selected="subTab === 'calendar'"
           @click="subTab = 'calendar'"
-          class="px-4 py-1.5 rounded-xl text-[13px] font-medium transition"
-          :class="subTab === 'calendar' ? 'bg-white text-charcoal shadow-sm' : 'text-warmgray'"
+          class="px-5 py-2 rounded-full text-[13px] font-medium transition"
+          :class="subTab === 'calendar' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
         >
-          {{ viewYear }}年{{ viewMonth }}月 穿搭日历
+          穿搭日历
         </button>
         <button
+          role="tab"
+          :aria-selected="subTab === 'favorites'"
           @click="subTab = 'favorites'"
-          class="px-4 py-1.5 rounded-xl text-[13px] font-medium transition flex items-center gap-1.5"
-          :class="subTab === 'favorites' ? 'bg-white text-charcoal shadow-sm' : 'text-warmgray'"
+          class="px-5 py-2 rounded-full text-[13px] font-medium transition flex items-center gap-1.5"
+          :class="subTab === 'favorites' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
         >
-          我的收藏方案
-          <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-md bg-terracotta-light text-terracotta-dark">
+          收藏方案
+          <span
+            class="font-mono text-[11px] px-1.5 rounded-full leading-[18px]"
+            :class="subTab === 'favorites' ? 'bg-white/20 text-white' : 'bg-[#E5E5E5] text-black'"
+          >
             {{ lookbookStore.favorites.length }}
           </span>
         </button>
       </div>
-      <button @click="router.push('/lookbook')" class="text-[12.5px] font-medium text-charcoal hover:text-terracotta transition">
+      <button @click="router.push('/lookbook')" class="text-[12.5px] font-medium text-black hover:text-[#666666] transition">
         + 去画板生成新穿搭
       </button>
     </div>
 
     <!-- Calendar View -->
     <div v-if="subTab === 'calendar'" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <div class="lg:col-span-7 bg-white rounded-3xl border border-oat-300 shadow-editorial p-6">
+      <div class="lg:col-span-7 bg-white rounded-3xl border border-black/[0.08] p-6">
         <div class="flex items-center justify-between mb-5">
           <div>
-            <h3 class="font-serif text-xl font-semibold text-charcoal">{{ monthLabelEn }}</h3>
-            <p class="text-[12px] text-warmgray mt-0.5">
-              本月已记录 <span class="font-mono text-charcoal font-semibold">{{ monthRecordCount }}</span> 天穿搭档案
+            <h3 class="text-xl font-semibold text-black">{{ viewYear }}年{{ viewMonth }}月</h3>
+            <p class="text-[12px] text-[#666666] mt-0.5">
+              本月已记录 <span class="font-mono text-black font-semibold">{{ monthRecordCount }}</span> 天穿搭档案
             </p>
           </div>
           <div class="flex items-center gap-1.5">
             <button
               @click="shiftMonth(-1)"
-              class="w-8 h-8 rounded-full bg-oat-100 hover:bg-oat-200 text-charcoal flex items-center justify-center transition"
+              class="w-8 h-8 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] text-black flex items-center justify-center transition"
             >
               <AppIcon name="chevron-left" :size="15" />
             </button>
-            <span class="px-3 py-1 rounded-full bg-oat-100 border border-oat-300 text-[11.5px] text-warmgray font-mono">
-              TODAY: {{ todayStr.slice(5).replace('-', '.') }}
+            <span class="px-3 py-1 rounded-full bg-[#F5F5F5] border border-black/[0.08] text-[11.5px] text-[#666666] font-mono">
+              今天 {{ todayStr.slice(5).replace('-', '.') }}
             </span>
             <button
               @click="shiftMonth(1)"
-              class="w-8 h-8 rounded-full bg-oat-100 hover:bg-oat-200 text-charcoal flex items-center justify-center transition"
+              class="w-8 h-8 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] text-black flex items-center justify-center transition"
             >
               <AppIcon name="chevron-right" :size="15" />
             </button>
           </div>
         </div>
 
-        <div class="grid grid-cols-7 gap-2 text-center text-[11.5px] font-mono text-warmgray mb-2">
+        <div class="grid grid-cols-7 gap-2 text-center text-[11.5px] font-mono text-[#666666] mb-2">
           <div v-for="wd in ['日', '一', '二', '三', '四', '五', '六']" :key="wd">{{ wd }}</div>
         </div>
 
@@ -177,10 +176,10 @@ function openLookInEngine(plan: OutfitPlanVo) {
               :class="[
                 cell.record
                   ? selectedRecord?.wearDate === cell.dateStr
-                    ? 'bg-charcoal text-white border-charcoal shadow-md'
-                    : 'bg-oat-50 hover:bg-oat-100 border-oat-300 cursor-pointer'
-                  : 'bg-transparent border-transparent text-warmgray/60 cursor-default',
-                cell.dateStr === todayStr && selectedRecord?.wearDate !== cell.dateStr ? 'ring-2 ring-terracotta/60' : '',
+                    ? 'bg-black text-white border-black shadow-md'
+                    : 'bg-[#FAFAFA] hover:bg-[#F5F5F5] border-black/[0.08] cursor-pointer'
+                  : 'bg-transparent border-transparent text-[#666666]/60 cursor-default',
+                cell.dateStr === todayStr && selectedRecord?.wearDate !== cell.dateStr ? 'ring-2 ring-black/40' : '',
               ]"
             >
               <div class="flex items-center justify-between w-full">
@@ -188,7 +187,7 @@ function openLookInEngine(plan: OutfitPlanVo) {
                 <span
                   v-if="cell.record"
                   class="hidden sm:inline font-mono text-[10px]"
-                  :class="selectedRecord?.wearDate === cell.dateStr ? 'text-terracotta-light' : 'text-terracotta'"
+                  :class="selectedRecord?.wearDate === cell.dateStr ? 'text-white/70' : 'text-black'"
                 >
                   {{ cell.record.weatherTemp }}°
                 </span>
@@ -210,19 +209,19 @@ function openLookInEngine(plan: OutfitPlanVo) {
       </div>
 
       <!-- Daily Archive Panel -->
-      <div class="lg:col-span-5 bg-white rounded-3xl border border-oat-300 shadow-editorial p-6 flex flex-col justify-between">
+      <div class="lg:col-span-5 bg-white rounded-3xl border border-black/[0.08] p-6 flex flex-col justify-between">
         <div v-if="selectedRecord">
-          <div class="flex items-center justify-between pb-4 border-b border-oat-200 gap-2">
+          <div class="flex items-center justify-between pb-4 border-b border-black/[0.06] gap-2">
             <div>
-              <span class="font-mono text-[12px] text-terracotta font-semibold">{{ selectedRecord.wearDate }}</span>
-              <h3 class="font-serif text-xl font-semibold text-charcoal mt-0.5">{{ selectedRecord.themeTitle }}</h3>
+              <span class="font-mono text-[12px] text-black font-semibold">{{ selectedRecord.wearDate }}</span>
+              <h3 class="text-xl font-semibold text-black mt-0.5">{{ selectedRecord.themeTitle }}</h3>
             </div>
             <div class="text-right shrink-0">
-              <div class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-oat-100 text-[12px] text-charcoal">
-                <AppIcon :name="selectedRecord.weatherIcon || 'cloud-sun'" :size="13" class="text-terracotta" />
+              <div class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#F5F5F5] text-[12px] text-black">
+                <AppIcon :name="selectedRecord.weatherIcon || 'cloud-sun'" :size="13" class="text-black" />
                 {{ selectedRecord.weatherInfo }}
               </div>
-              <div class="text-[11px] text-warmgray mt-1">场景：{{ selectedRecord.sceneTag }}</div>
+              <div class="text-[11px] text-[#666666] mt-1">场景：{{ selectedRecord.sceneTag }}</div>
             </div>
           </div>
 
@@ -231,24 +230,24 @@ function openLookInEngine(plan: OutfitPlanVo) {
               v-for="item in selectedRecord.items"
               :key="item.id"
               @click="wardrobeStore.drawerItem = item"
-              class="rounded-2xl bg-oat-100 border border-oat-200 p-2 flex flex-col items-center cursor-pointer hover:border-charcoal/40 transition"
+              class="rounded-2xl bg-[#F5F5F5] border border-black/[0.06] p-2 flex flex-col items-center cursor-pointer hover:border-black/40 transition"
             >
               <div class="w-full aspect-square">
                 <GarmentVisual :image-url="item.processedImageUrl" :svg-type="item.svgType" :color-hex="item.colorHex" :alt="item.name" />
               </div>
-              <span class="text-[10.5px] text-charcoal truncate w-full text-center mt-1">{{ item.name }}</span>
+              <span class="text-[10.5px] text-black truncate w-full text-center mt-1">{{ item.name }}</span>
             </div>
           </div>
 
-          <div v-if="selectedRecord.aiReasoning" class="p-3.5 rounded-2xl bg-oat-50 border border-oat-200 mb-4">
-            <div class="text-[11.5px] font-semibold text-warmgray mb-1">当日 AI 搭配记录</div>
-            <p class="text-[12.5px] text-charcoal-soft leading-relaxed">{{ selectedRecord.aiReasoning }}</p>
+          <div v-if="selectedRecord.aiReasoning" class="p-3.5 rounded-2xl bg-[#FAFAFA] border border-black/[0.06] mb-4">
+            <div class="text-[11.5px] font-semibold text-[#666666] mb-1">当日 AI 搭配记录</div>
+            <p class="text-[12.5px] text-[#333333] leading-relaxed">{{ selectedRecord.aiReasoning }}</p>
           </div>
 
           <div>
             <div class="flex items-center justify-between mb-1.5">
-              <label class="text-[12px] font-medium text-warmgray">个人穿搭心得笔记</label>
-              <div class="flex items-center gap-0.5 text-amber-500 text-sm">
+              <label class="text-[12px] font-medium text-[#666666]">个人穿搭心得笔记</label>
+              <div class="flex items-center gap-0.5 text-black text-sm">
                 <button
                   v-for="star in 5"
                   :key="star"
@@ -262,12 +261,12 @@ function openLookInEngine(plan: OutfitPlanVo) {
             <textarea
               v-model="noteDraft"
               rows="2"
-              class="w-full px-3.5 py-2.5 rounded-2xl bg-oat-50 border border-oat-300 focus:border-charcoal focus:bg-white outline-none text-[13px] resize-none"
+              class="w-full px-3.5 py-2.5 rounded-2xl bg-[#FAFAFA] border border-black/[0.08] focus:border-black focus:bg-white outline-none text-[13px] resize-none"
             />
             <div class="flex justify-end mt-2">
               <button
                 @click="saveNotes"
-                class="px-3.5 py-1.5 rounded-full bg-charcoal hover:bg-charcoal-hover text-white text-[12px] font-medium transition"
+                class="px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition"
               >
                 保存心得
               </button>
@@ -275,9 +274,9 @@ function openLookInEngine(plan: OutfitPlanVo) {
           </div>
         </div>
 
-        <div v-else class="py-16 text-center text-warmgray text-[13px] space-y-2">
+        <div v-else class="py-16 text-center text-[#666666] text-[13px] space-y-2">
           <p>当前账号暂无穿搭历史记录</p>
-          <button @click="router.push('/lookbook')" class="px-4 py-2 rounded-full bg-charcoal text-white text-[12.5px]">
+          <button @click="router.push('/lookbook')" class="px-4 py-2 rounded-full bg-black text-white text-[12.5px]">
             去画板记录今日穿搭
           </button>
         </div>
@@ -290,19 +289,19 @@ function openLookInEngine(plan: OutfitPlanVo) {
         <div
           v-for="look in lookbookStore.favorites"
           :key="look.id"
-          class="bg-white rounded-3xl border border-oat-300 shadow-card p-5 flex flex-col justify-between"
+          class="bg-white rounded-3xl border border-black/[0.08] p-5 flex flex-col justify-between"
         >
           <div>
             <div class="flex items-start justify-between gap-2 mb-3">
               <div>
-                <span class="text-[11px] px-2 py-0.5 rounded-full bg-oat-100 text-warmgray">{{ look.sceneTag }}</span>
-                <h4 class="font-serif text-[17px] font-semibold text-charcoal mt-1">{{ look.themeTitle }}</h4>
+                <span class="text-[11px] px-2 py-0.5 rounded-full bg-[#F5F5F5] text-[#666666]">{{ look.sceneTag }}</span>
+                <h4 class="text-[17px] font-semibold text-black mt-1">{{ look.themeTitle }}</h4>
               </div>
               <button @click="removeFavorite(look.id)" class="text-black hover:scale-110 transition" title="取消收藏">
                 <AppIcon name="heart" :size="18" fill="#000000" />
               </button>
             </div>
-            <div class="grid grid-cols-4 gap-2 p-3 rounded-2xl flatlay-canvas border border-oat-200 mb-3">
+            <div class="grid grid-cols-4 gap-2 p-3 rounded-2xl flatlay-canvas border border-black/[0.06] mb-3">
               <div
                 v-for="(s, idx) in look.slots.slice(0, 4)"
                 :key="idx"
@@ -311,20 +310,20 @@ function openLookInEngine(plan: OutfitPlanVo) {
                 <GarmentVisual :image-url="s.item.processedImageUrl" :svg-type="s.item.svgType" :color-hex="s.item.colorHex" />
               </div>
             </div>
-            <p class="text-[12.5px] text-warmgray leading-relaxed">{{ look.aiReasoning }}</p>
+            <p class="text-[12.5px] text-[#666666] leading-relaxed">{{ look.aiReasoning }}</p>
           </div>
-          <div class="mt-4 pt-3 border-t border-oat-200 flex items-center justify-between">
-            <span class="font-mono text-[12px] text-terracotta font-semibold">匹配度 {{ look.matchScore }}%</span>
+          <div class="mt-4 pt-3 border-t border-black/[0.06] flex items-center justify-between">
+            <span class="font-mono text-[12px] text-black font-semibold">匹配度 {{ look.matchScore }}%</span>
             <button
               @click="openLookInEngine(look)"
-              class="px-3.5 py-1.5 rounded-full bg-charcoal text-white text-[12px] font-medium hover:bg-charcoal-hover transition"
+              class="px-3.5 py-1.5 rounded-full bg-black text-white text-[12px] font-medium hover:bg-[#262626] transition"
             >
               在画板中打开 →
             </button>
           </div>
         </div>
       </div>
-      <div v-else class="bg-white rounded-3xl border border-oat-300 py-14 text-center text-[13px] text-warmgray">
+      <div v-else class="bg-white rounded-3xl border border-black/[0.08] py-14 text-center text-[13px] text-[#666666]">
         暂无收藏的穿搭方案
       </div>
     </div>

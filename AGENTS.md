@@ -40,19 +40,31 @@ Avoid generic admin blue templates, heavy colored shadows, or cluttered dark neo
 - **Data Mono (`font-mono`)**: `'JetBrains Mono', monospace` — Prices (`¥299`), CPW (`CPW ¥37.4`), match scores (`96%`), temperatures (`18°C`), view counts (`14.2w`), wear counts, calendar dates.
 
 ### 2.3 Navigation Shell & Core Views (`AppLayout.vue`)
+Design direction: **minimal, Acloset-style** — few controls per screen, categories laid out flat, details tucked behind a tap. Do not re-introduce dense metric strips, per-card badges or multi-row toolbars.
+
 - **No Left Sidebar**: Keep the centered full-canvas gallery layout (`max-w-[920px]` on `/inspo`, `max-w-[1080px]` on workspace views) with generous bottom breathing room (`pb-28`) for the floating dock.
-- **Minimal Sticky Top Header (`h-14`)**: `ALTA · 智搭` wordmark + route title on left; lightweight desktop pill shortcuts (`搭配画板` / `AI 识图` / `穿搭日历`) in center; interactive Weather Capsule + Logout button on right.
+- **Minimal Sticky Top Header (`h-14`)**: `ALTA · 智搭` wordmark + current route title (e.g. `AI 识别`, `我的`) on the left; on the right only the interactive Weather Capsule and, while a try-on job is running, a black `AI 试穿生成中` pill. There are **no center pill shortcuts** and **no logout button** in the header (logout lives in `我的` → `偏好与设置`).
 - **Unified Floating Liquid Glass Bottom Dock (`#alta-floating-dock`)**:
   - Centered `max-w-[540px]` pill with sliding translucent highlight capsule (`25%` width per tab):
-    1. **首页 (`/`)** — Minimal Hero + Today's Curated Look + Top 6 China Inspo preview + Indyx CPW asset card + recent favorites.
-    2. **衣橱 (`/wardrobe`)** — CPW asset header strip + category/color/keyword filters + **CPW sort selector** (`CPW 最低` / `CPW 最高` / `穿着最多`) + `4:5` gallery cards with CPW badges + `ItemDetailDrawer` (editable `price`, live CPW insight, reverse calendar lookup).
+    1. **首页 (`/`)** — Hero = **Today's Look** (weather-aware curated outfit, one primary action) → `今日热度造型 TOP 6` China Inspo preview → `近期收藏搭配方案`. No CPW card on the home page.
+    2. **衣橱 (`/wardrobe`)** — One-line summary (`共 N 件单品 · …`, link to `/profile?tab=stats`) + flat category pills (`全部 / 外套 / 上衣 / 下装 / 鞋履 / 包配`) + search + a single `筛选与排序` button that opens a bottom filter sheet (color / season / **CPW sort**: `CPW 最低` / `CPW 最高` / `穿着最多`). Cards are plain `4:5` image + name (CPW only appears once a price is recorded); hover/touch shows a small "以此单品为核心搭配" action. `ItemDetailDrawer` keeps editable `price`, live CPW insight and reverse calendar lookup.
     3. **灵感发现 🔍 (`/inspo`)** — China-adapted Alta Inspo experience:
        - Top pill search bar + liked-only heart filter (`POST /api/inspo/looks/{id}/like`).
        - Three underline tabs: `为你推荐` (dual editorial banners + 6-col borderless model wall with China cities), `热度榜` (`女装 / 男装` pill toggle + `.alta-rank-stroke` outlined rank numbers), `品牌精选` (China designer & urban brands with Taobao/JD flagship links).
        - **Layer 2 (`InspoLookModal.vue`)**: Full-height white showcase with top-left `<`, top-right `...`, **left floating vertical piece rail** (click any clothing/jewelry piece), centered full-body model photo, bottom-right vertical social actions (like, comment drawer, one-click restyle into `/lookbook`).
        - **Layer 3 (`InspoPieceModal.vue`)**: `来自 XX 的衣橱` piece hero + direct **Taobao (`s.taobao.com/search`) & JD (`search.jd.com/Search`)** links + `收入我的衣橱` (records `price` for CPW) + 4-column `选购相似同款` grid with Taobao/JD filtering.
-    4. **我的 (`/profile`)** — Style/color/city/budget preferences, Server AI Model & API Key config card (`AiModelConfigCard.vue`), Indyx CPW deep asset summary, category donut, style affinity, and wardrobe palette.
-  - **Independent `56×56` Black Circular `+` Button**: Opens a floating Action Sheet linking to AI Item Scan (`/scan?mode=item`), AI Street-Snap Breakdown (`/scan?mode=inspiration`), Smart Lookbook Canvas (`/lookbook`), and Calendar & Favorites (`/calendar`).
+    4. **我的 (`/profile`)** — Three underline tabs driven by the URL (`/profile?tab=stats|calendar|settings`, default `stats`; `settings` also accepts `panel=ai` to open the model config):
+       - `衣橱统计` — Indyx CPW asset summary, category donut, style affinity, wardrobe palette.
+       - `穿搭与收藏` — Calendar overview (this-month / total record counts, latest record) with an entry into the full `/calendar` page, plus favorited outfit plans.
+       - `偏好与设置` — Style/color/city/budget preferences, Server AI Model & API Key config card (`AiModelConfigCard.vue`), logout.
+  - **Independent `56×56` Black Circular `+` Button**: Toggles a compact floating Action Sheet (no title bar, no × button, no description lines; `role="dialog"` `aria-label="新建"`) with exactly three actions: `AI 拍照 / 截图录入衣物` (`/scan?mode=item`), `AI 街拍拆解找同款` (`/scan?mode=inspiration`), and `智能平铺搭配画板` (`/lookbook`). Calendar & Favorites are reached via `我的` → `穿搭与收藏` (the `/calendar` route is kept).
+
+#### 2.3.1 AI 识别 (`/scan`, `VisionStudioView.vue`)
+- Two segmented modes: `录入衣物` (`mode=item`) and `街拍找同款` (`mode=inspiration`, lazily loaded).
+- **录入衣物 is a multi-item recognition list**: uploading a photo (or picking a built-in sample) starts recognition immediately — there is no separate "start" button. Left: the photo (with `原图 / 抠图` toggle on the single-item path). Right: a checklist where each row is `checkbox · garment thumbnail · category tag · name · 季节 + 风格标签 summary`; tapping a row expands an accordion for corrections (name, season chips, style tags, color, material, price). Footer: select-all and one black `添加到衣橱` button.
+- **Real per-item images (multi-item path)**: with an active model the client calls `POST /api/vision/detect-items`; when ≥ 2 garments come back, each `bbox` is cropped on a canvas (`utils/crop.ts`), then cut out sequentially in the browser (`tryBrowserCutout`, thumbnails refresh as each finishes). On save the crop (+ cutout) is uploaded with `POST /api/vision/store-item-image` and the wardrobe item stores the returned `/uploads/user_{id}/…` URLs. Items without a usable box, or whose upload fails, degrade to the `svg://{type}` illustration; the item is still saved. Never persist `data:` URLs to the wardrobe.
+- 0–1 detected garments, or no API key, falls back to the single-item pipeline (`tryBrowserCutout` + `POST /api/vision/recognize-item`).
+- Pieces whose `similarWardrobeName` is set (an already-owned near-duplicate) are unchecked by default with an explanatory line.
 
 ### 2.4 Advanced Lookbook Studio Capabilities (Implemented)
 - **Free-Form Flat-Lay Collage Canvas (`FlatLayCollageCanvas.vue` inside `/lookbook`)**:
@@ -91,6 +103,11 @@ All REST responses follow `{ "code": 200, "message": "success", "data": ..., "ti
 ### 3.4 Image Validation, CPW Metrics & Recommendation Formula
 - Validate uploaded files by **magic bytes** (JPEG / PNG / WEBP) and size (`<= 10MB`) with UUID filenames under per-user upload folders.
 - **CPW (Cost-Per-Wear)**: `wardrobe_item.price` is nullable `DECIMAL(10,2)`. Item CPW is `price / wearCount` (when `wearCount > 0`) or `price` (when unworn); `GET /api/preferences` computes `totalWardrobeValue`, `avgCostPerWear`, `pricedItemCount`, `bestValueItemName/Cpw`, and `highestCpwItemName/Cpw`.
+- **Vision endpoints (`VisionController`, all behind `JwtAuthInterceptor`, userId from `UserContextHolder`)**:
+  - `POST /api/vision/recognize-item` — single garment (original + optional browser cutout, LLM attributes or local filename fallback).
+  - `POST /api/vision/detect-items` — multi-garment detection for wardrobe ingestion (`file`, `sourceType`). Response `ItemsDetectionVo`: `originalImageUrl`, `items[]` (≤ 8; name / category / seasons / styleTags / material / `svgType` / `bbox` / `similarWardrobeName`), `usedRealLlm`, `notice`. `bbox` is `{x, y, w, h}` as **fractions of the image (0..1, top-left origin)**; `VisionRecognitionService.normalizeBoundingBox` accepts fractions, 0–100 percentages, 0–1000 grids and corner boxes, clamps to the image, and returns `null` for unusable boxes (client then keeps an illustration for that piece). Without an active model key nothing is stored and `items` is `[]` (the file is still magic-byte validated). `isClothing=false` or an empty list → `42201`.
+  - `POST /api/vision/store-item-image` — persists one client-side crop (`file`) and optional browser cutout (`cutoutFile`) into the caller's `/uploads/user_{id}/` folder; a broken cutout degrades to the crop (`cutoutFallback=true`), a broken crop is rejected with `40002`.
+  - `POST /api/vision/analyze-inspiration` — street-snap breakdown with shopping matches (mode `街拍找同款`).
 - **Personalized Recommendation Formula (PRD §4.3)**:
 $$S(i) = 0.30 \cdot \text{TempMatch}(i, T) + 0.25 \cdot \text{StylePref}(i, P) + 0.15 \cdot \text{ColorPref}(i, P) + 0.30 \cdot \text{SceneMatch}(i, C) - 0.15 \cdot \text{RecentWearPenalty}(i, H)$$
 
@@ -115,7 +132,7 @@ pnpm build      # Type-check + production bundle verification
 ```
 
 ### Pre-Commit / Post-Optimization Checklist
-1. Verify `mvn test` passes (JWT auth, `40301` IDOR isolation, `40002` magic-byte check, recommendation scoring, encrypted AI config, CPW calculation, and China Inspo feed/like isolation).
+1. Verify `mvn test` passes (JWT auth, `40301` IDOR isolation, `40002` magic-byte check, recommendation scoring, encrypted AI config, CPW calculation, China Inspo feed/like isolation, and `detect-items` / `store-item-image` auth, magic-byte, no-key and bbox-normalization cases).
 2. Verify `pnpm build` completes cleanly with zero TypeScript or Vite bundling errors.
 3. Visually verify in local Chrome (`chrome-devtools` MCP) that the Alta pure-white gallery canvas (`#FFFFFF`), centered floating Liquid Glass Dock + black `+` button, `/inspo` 3-layer flow (Grid/Top/Brands → Look Modal → Taobao/JD Piece Modal), and CPW metrics render cleanly with zero console errors or broken images.
 

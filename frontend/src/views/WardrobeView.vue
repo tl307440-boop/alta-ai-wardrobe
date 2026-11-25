@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useWardrobeStore } from '@/stores/wardrobe';
 import { useLookbookStore } from '@/stores/lookbook';
@@ -8,6 +8,15 @@ import { CATEGORY_OPTIONS, COLOR_SWATCHES, categoryLabel } from '@/utils/constan
 import type { WardrobeItem } from '@/types';
 import AppIcon from '@/components/AppIcon.vue';
 import GarmentVisual from '@/components/GarmentVisual.vue';
+
+type SortKey = 'recent' | 'cpw_asc' | 'cpw_desc' | 'wear_desc';
+
+const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
+  { key: 'recent', label: '默认' },
+  { key: 'cpw_asc', label: 'CPW 最低' },
+  { key: 'cpw_desc', label: 'CPW 最高' },
+  { key: 'wear_desc', label: '穿着最多' },
+];
 
 const router = useRouter();
 const wardrobeStore = useWardrobeStore();
@@ -18,12 +27,15 @@ const filter = reactive({
   category: 'all',
   color: 'all',
   keyword: '',
-  sortBy: 'recent' as 'recent' | 'cpw_asc' | 'cpw_desc' | 'wear_desc',
+  sortBy: 'recent' as SortKey,
 });
 
-function countByCategory(key: string) {
-  return wardrobeStore.items.filter((i) => i.category === key).length;
-}
+const filterOpen = ref(false);
+
+// 面板内的筛选项（色系 + 排序）数量，用于按钮角标
+const activeFilterCount = computed(
+  () => (filter.color !== 'all' ? 1 : 0) + (filter.sortBy !== 'recent' ? 1 : 0)
+);
 
 function effectiveCpw(item: WardrobeItem): number | null {
   if (item.costPerWear != null) return Number(item.costPerWear);
@@ -57,11 +69,24 @@ const filteredWardrobe = computed(() => {
   return list;
 });
 
+const avgCpwText = computed(() => {
+  const v = wardrobeStore.preference.avgCostPerWear;
+  return v != null ? `¥${Number(v).toFixed(0)}` : null;
+});
+
+function resetPanelFilters() {
+  filter.color = 'all';
+  filter.sortBy = 'recent';
+}
+
 function resetFilters() {
   filter.category = 'all';
-  filter.color = 'all';
   filter.keyword = '';
-  filter.sortBy = 'recent';
+  resetPanelFilters();
+}
+
+function openItem(item: WardrobeItem) {
+  wardrobeStore.drawerItem = item;
 }
 
 async function styleWithAnchor(item: WardrobeItem) {
@@ -71,140 +96,114 @@ async function styleWithAnchor(item: WardrobeItem) {
   await lookbookStore.generateRecommendation({ triggerType: 'anchor_item', anchorItemId: item.id });
   toast.show(`已围绕「${item.name}」生成专属搭配方案`);
 }
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && filterOpen.value) filterOpen.value = false;
+}
+onMounted(() => window.addEventListener('keydown', onKeydown));
+onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>
-  <section class="space-y-6">
-    <!-- Indyx × Alta CPW Wardrobe Value Header Strip -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      <div class="rounded-2xl bg-[#FAFAFA] border border-black/[0.06] p-4">
-        <div class="text-[11px] font-mono uppercase tracking-wider text-[#666666]">衣橱总价值</div>
-        <div class="font-mono text-[22px] font-semibold text-black mt-1">
-          ¥{{ Number(wardrobeStore.preference.totalWardrobeValue || 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 }) }}
-        </div>
-        <div class="text-[11px] text-[#666666] mt-0.5">
-          已计价 {{ wardrobeStore.preference.pricedItemCount || 0 }} / {{ wardrobeStore.items.length }} 件
-        </div>
-      </div>
-
-      <div class="rounded-2xl bg-[#FAFAFA] border border-black/[0.06] p-4">
-        <div class="text-[11px] font-mono uppercase tracking-wider text-[#666666]">平均单次成本 (CPW)</div>
-        <div class="font-mono text-[22px] font-semibold text-black mt-1">
-          {{ wardrobeStore.preference.avgCostPerWear != null ? `¥${Number(wardrobeStore.preference.avgCostPerWear).toFixed(1)}` : '--' }}
-        </div>
-        <div class="text-[11px] text-[#666666] mt-0.5">购入总价 ÷ 累计穿着次数</div>
-      </div>
-
-      <div class="rounded-2xl bg-[#FAFAFA] border border-black/[0.06] p-4">
-        <div class="text-[11px] font-mono uppercase tracking-wider text-[#666666]">最值回票价</div>
-        <div class="text-[14px] font-semibold text-black mt-1.5 truncate">
-          {{ wardrobeStore.preference.bestValueItemName || '暂未录入价格' }}
-        </div>
-        <div class="font-mono text-[11.5px] text-emerald-700 mt-0.5">
-          {{ wardrobeStore.preference.bestValueCpw != null ? `CPW ¥${Number(wardrobeStore.preference.bestValueCpw).toFixed(1)} / 次` : '--' }}
-        </div>
-      </div>
-
-      <div class="rounded-2xl bg-[#FAFAFA] border border-black/[0.06] p-4">
-        <div class="text-[11px] font-mono uppercase tracking-wider text-[#666666]">待唤醒高成本单品</div>
-        <div class="text-[14px] font-semibold text-black mt-1.5 truncate">
-          {{ wardrobeStore.preference.highestCpwItemName || '暂无闲置单品' }}
-        </div>
-        <div class="font-mono text-[11.5px] text-[#666666] mt-0.5">
-          {{ wardrobeStore.preference.highestCpw != null ? `CPW ¥${Number(wardrobeStore.preference.highestCpw).toFixed(1)} / 次` : `闲置率 ${wardrobeStore.preference.idleRate}%` }}
-        </div>
-      </div>
+  <section class="space-y-4">
+    <!-- One-line summary -->
+    <div class="flex items-center justify-between gap-3 text-[13px] text-[#666666]">
+      <p>
+        共 <span class="font-mono text-black">{{ wardrobeStore.items.length }}</span> 件单品
+        <template v-if="avgCpwText">
+          · 平均 CPW <span class="font-mono text-black">{{ avgCpwText }}</span>
+        </template>
+        <template v-else> · 录入购入价后可查看 CPW</template>
+      </p>
+      <button
+        @click="router.push({ path: '/profile', query: { tab: 'stats' } })"
+        class="shrink-0 hover:text-black transition"
+      >
+        查看统计 →
+      </button>
     </div>
 
-    <!-- Minimal Alta Search + Category + Sort Controls -->
-    <div class="space-y-3.5 pb-4 border-b border-black/[0.08]">
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div class="flex flex-wrap gap-1.5">
+    <!-- Single-row toolbar: category tabs + search + filter -->
+    <div class="flex flex-col-reverse gap-3 md:flex-row md:items-center md:gap-4">
+      <div class="min-w-0 md:flex-1 overflow-x-auto no-scrollbar">
+        <div class="flex items-center gap-1.5 w-max" role="tablist" aria-label="衣物品类">
           <button
+            role="tab"
+            :aria-selected="filter.category === 'all'"
             @click="filter.category = 'all'"
-            class="px-3.5 py-1.5 rounded-full text-[13px] font-medium transition flex items-center gap-1.5"
+            class="px-3.5 py-1.5 rounded-full text-[13px] font-medium whitespace-nowrap transition"
             :class="filter.category === 'all' ? 'bg-black text-white' : 'bg-[#F2F2F2] text-[#333333] hover:bg-[#E5E5E5]'"
           >
-            全部 <span class="font-mono text-[11px] opacity-75">{{ wardrobeStore.items.length }}</span>
+            全部
           </button>
           <button
             v-for="cat in CATEGORY_OPTIONS"
             :key="cat.key"
+            role="tab"
+            :aria-selected="filter.category === cat.key"
             @click="filter.category = cat.key"
-            class="px-3.5 py-1.5 rounded-full text-[13px] font-medium transition flex items-center gap-1.5"
+            class="px-3.5 py-1.5 rounded-full text-[13px] font-medium whitespace-nowrap transition"
             :class="filter.category === cat.key ? 'bg-black text-white' : 'bg-[#F2F2F2] text-[#333333] hover:bg-[#E5E5E5]'"
           >
-            {{ cat.label }} <span class="font-mono text-[11px] opacity-75">{{ countByCategory(cat.key) }}</span>
+            {{ cat.label }}
           </button>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <div class="relative flex-1 md:w-56">
-            <AppIcon name="search" :size="15" class="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#666666]" />
-            <input
-              v-model="filter.keyword"
-              type="text"
-              placeholder="搜单品、风格或颜色..."
-              class="w-full pl-9 pr-8 py-2 rounded-full bg-[#F2F2F2] focus:bg-[#EBEBEB]/70 outline-none text-[13px] transition"
-            />
-            <button
-              v-if="filter.keyword"
-              @click="filter.keyword = ''"
-              class="absolute right-3 top-1/2 -translate-y-1/2 text-[#666666] hover:text-black text-sm"
-            >
-              ×
-            </button>
-          </div>
-
-          <select
-            v-model="filter.sortBy"
-            class="px-3.5 py-2 rounded-full bg-[#F2F2F2] text-[12.5px] font-medium text-black outline-none cursor-pointer"
-          >
-            <option value="recent">默认排序</option>
-            <option value="cpw_asc">CPW 最低（最值）</option>
-            <option value="cpw_desc">CPW 最高（待唤醒）</option>
-            <option value="wear_desc">穿着次数最多</option>
-          </select>
         </div>
       </div>
 
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="flex flex-wrap items-center gap-1.5">
+      <div class="flex items-center gap-2 shrink-0">
+        <div class="relative flex-1 md:w-48 md:flex-none">
+          <AppIcon name="search" :size="15" class="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#666666]" />
+          <input
+            v-model="filter.keyword"
+            type="text"
+            placeholder="搜索单品"
+            aria-label="搜索单品"
+            class="w-full pl-9 pr-8 py-2 rounded-full bg-[#F2F2F2] focus:bg-[#EBEBEB]/70 outline-none text-[13px] transition"
+          />
           <button
-            @click="filter.color = 'all'"
-            class="px-2.5 py-1 rounded-full text-[11.5px] font-medium border transition"
-            :class="filter.color === 'all' ? 'bg-black text-white border-black' : 'bg-white text-[#666666] border-black/10'"
+            v-if="filter.keyword"
+            @click="filter.keyword = ''"
+            aria-label="清除搜索"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-[#666666] hover:text-black text-sm leading-none"
           >
-            全部色系
-          </button>
-          <button
-            v-for="sw in COLOR_SWATCHES"
-            :key="sw.name"
-            @click="filter.color = filter.color === sw.name ? 'all' : sw.name"
-            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11.5px] transition"
-            :class="
-              filter.color === sw.name
-                ? 'bg-black text-white border-black font-medium'
-                : 'bg-white border-black/10 text-[#333333] hover:bg-[#F5F5F5]'
-            "
-          >
-            <span class="w-2.5 h-2.5 rounded-full border border-black/15" :style="{ backgroundColor: sw.hex }" />
-            {{ sw.name }}
+            ×
           </button>
         </div>
-        <span class="text-[12px] text-[#666666] font-mono">{{ filteredWardrobe.length }} PIECES</span>
+
+        <button
+          @click="filterOpen = true"
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-[#F2F2F2] hover:bg-[#E5E5E5] text-[12.5px] font-medium text-black transition shrink-0"
+        >
+          <AppIcon name="sliders" :size="14" />
+          筛选与排序
+          <span
+            v-if="activeFilterCount > 0"
+            class="min-w-[18px] h-[18px] px-1 rounded-full bg-black text-white font-mono text-[10.5px] leading-[18px] text-center"
+          >
+            {{ activeFilterCount }}
+          </span>
+        </button>
       </div>
     </div>
 
-    <!-- Alta Minimal 4:5 Garment Gallery -->
-    <div v-if="filteredWardrobe.length > 0" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-5">
+    <!-- Garment Catalog Grid -->
+    <div
+      v-if="filteredWardrobe.length > 0"
+      class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-3 gap-y-5 sm:gap-x-4"
+    >
       <div
         v-for="item in filteredWardrobe"
         :key="item.id"
-        @click="wardrobeStore.drawerItem = item"
-        class="group cursor-pointer flex flex-col"
+        role="button"
+        tabindex="0"
+        :aria-label="`查看${item.name}详情`"
+        @click="openItem(item)"
+        @keydown.enter.self="openItem(item)"
+        class="group cursor-pointer flex flex-col focus:outline-none"
       >
-        <div class="relative aspect-[4/5] rounded-2xl bg-[#F5F5F5] p-5 flex items-center justify-center overflow-hidden">
+        <div
+          class="relative aspect-[4/5] rounded-2xl bg-[#F5F5F5] p-4 flex items-center justify-center overflow-hidden ring-black/70 group-focus-visible:ring-2"
+        >
           <GarmentVisual
             :image-url="item.processedImageUrl"
             :svg-type="item.svgType"
@@ -213,53 +212,25 @@ async function styleWithAnchor(item: WardrobeItem) {
             class="transition-transform duration-500 group-hover:scale-105"
           />
 
-          <span
-            class="absolute top-3 left-3 px-2 py-0.5 rounded-full bg-white/90 font-mono text-[10.5px] text-black"
-          >
-            穿 {{ item.wearCount }} 次
-          </span>
-
-          <span
-            v-if="effectiveCpw(item) != null"
-            class="absolute top-3 right-3 px-2 py-0.5 rounded-full font-mono text-[10.5px] font-medium"
-            :class="
-              (effectiveCpw(item) || 0) <= 40
-                ? 'bg-black text-white'
-                : 'bg-white/90 text-[#333333] border border-black/10'
-            "
-            title="单次穿着成本 = 购入价 ÷ 穿着次数"
-          >
-            CPW ¥{{ effectiveCpw(item)!.toFixed(0) }}
-          </span>
-
+          <!-- 桌面：悬停/聚焦时出现的文字胶囊 -->
           <button
             @click.stop="styleWithAnchor(item)"
-            class="absolute bottom-3 left-3 right-3 py-2 rounded-full bg-black/90 hover:bg-black text-white text-[12px] font-medium opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200 flex items-center justify-center gap-1.5 shadow-md"
+            class="absolute bottom-3 left-1/2 -translate-x-1/2 translate-y-2 whitespace-nowrap px-4 py-2 rounded-full bg-black/90 hover:bg-black text-white text-[12px] font-medium opacity-0 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 [@media(hover:none)]:hidden transition-all duration-200 flex items-center justify-center gap-1.5 shadow-md"
           >
             <AppIcon name="sparkles" :size="13" />
             以此单品为核心搭配
           </button>
+          <!-- 触屏：没有悬停，常驻一个小圆钮 -->
+          <button
+            @click.stop="styleWithAnchor(item)"
+            aria-label="以此单品为核心搭配"
+            class="hidden [@media(hover:none)]:flex absolute bottom-2 right-2 w-8 h-8 rounded-full bg-black text-white items-center justify-center shadow-md active:scale-95 transition"
+          >
+            <AppIcon name="sparkles" :size="14" />
+          </button>
         </div>
 
-        <div class="pt-2.5 px-0.5 space-y-1">
-          <div class="flex items-center justify-between gap-2">
-            <h4 class="font-medium text-[13.5px] text-black truncate">{{ item.name }}</h4>
-            <span v-if="item.price != null" class="font-mono text-[12px] text-[#666666] shrink-0">
-              ¥{{ Number(item.price).toFixed(0) }}
-            </span>
-          </div>
-          <div class="flex items-center justify-between text-[11.5px] text-[#666666]">
-            <span class="inline-flex items-center gap-1.5">
-              <span>{{ categoryLabel(item.category) }}</span>
-              <span>·</span>
-              <span class="w-2.5 h-2.5 rounded-full border border-black/15 inline-block" :style="{ backgroundColor: item.colorHex }" />
-              <span>{{ item.color }}</span>
-            </span>
-            <span v-if="item.styleTags?.length" class="truncate max-w-[90px] text-[11px] text-black/45">
-              {{ item.styleTags[0] }}
-            </span>
-          </div>
-        </div>
+        <h4 class="pt-2.5 px-0.5 font-medium text-[13px] text-black truncate">{{ item.name }}</h4>
       </div>
     </div>
 
@@ -287,5 +258,86 @@ async function styleWithAnchor(item: WardrobeItem) {
         </button>
       </div>
     </div>
+
+    <!-- Filter & Sort Sheet -->
+    <transition name="modal-fade">
+      <div
+        v-if="filterOpen"
+        class="fixed inset-0 !mt-0 z-50 flex items-end sm:items-center justify-center bg-black/25 backdrop-blur-[2px] p-4 pb-24 sm:pb-4"
+        @click.self="filterOpen = false"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="筛选与排序"
+          class="modal-sheet w-full max-w-[440px] bg-white rounded-[28px] border border-black/[0.08] shadow-float p-5 space-y-5"
+        >
+          <div class="flex items-center justify-between px-1">
+            <span class="text-[15px] font-semibold text-black">筛选与排序</span>
+            <button
+              @click="filterOpen = false"
+              aria-label="关闭"
+              class="w-7 h-7 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] flex items-center justify-center text-black"
+            >
+              <AppIcon name="x" :size="14" />
+            </button>
+          </div>
+
+          <div class="space-y-2.5">
+            <div class="px-1 text-[12.5px] text-[#666666]">排序</div>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="opt in SORT_OPTIONS"
+                :key="opt.key"
+                @click="filter.sortBy = opt.key"
+                class="px-3.5 py-1.5 rounded-full text-[13px] font-medium transition"
+                :class="filter.sortBy === opt.key ? 'bg-black text-white' : 'bg-[#F2F2F2] text-[#333333] hover:bg-[#E5E5E5]'"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+
+          <div class="space-y-2.5">
+            <div class="px-1 text-[12.5px] text-[#666666]">色系</div>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                @click="filter.color = 'all'"
+                class="px-3.5 py-1.5 rounded-full text-[13px] font-medium transition"
+                :class="filter.color === 'all' ? 'bg-black text-white' : 'bg-[#F2F2F2] text-[#333333] hover:bg-[#E5E5E5]'"
+              >
+                全部
+              </button>
+              <button
+                v-for="sw in COLOR_SWATCHES"
+                :key="sw.name"
+                @click="filter.color = filter.color === sw.name ? 'all' : sw.name"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium transition"
+                :class="filter.color === sw.name ? 'bg-black text-white' : 'bg-[#F2F2F2] text-[#333333] hover:bg-[#E5E5E5]'"
+              >
+                <span class="w-3 h-3 rounded-full border border-black/15" :style="{ backgroundColor: sw.hex }" />
+                {{ sw.name }}
+              </button>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2.5 pt-1">
+            <button
+              @click="resetPanelFilters"
+              :disabled="activeFilterCount === 0"
+              class="px-5 py-3 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] text-[13.5px] font-medium text-black transition disabled:opacity-40 disabled:hover:bg-[#F5F5F5]"
+            >
+              重置
+            </button>
+            <button
+              @click="filterOpen = false"
+              class="flex-1 py-3 rounded-full bg-black hover:bg-[#262626] text-white text-[13.5px] font-medium transition"
+            >
+              查看 {{ filteredWardrobe.length }} 件
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </section>
 </template>

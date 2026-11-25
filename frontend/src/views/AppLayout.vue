@@ -42,10 +42,28 @@ const dockItems = [
   { name: 'profile', path: '/profile', label: '我的', icon: 'user' },
 ];
 
-const quickHeaderLinks = [
-  { name: 'lookbook', path: '/lookbook', label: '搭配画板' },
-  { name: 'scan', path: '/scan', label: 'AI 识图' },
-  { name: 'calendar', path: '/calendar', label: '穿搭日历' },
+const createActions = [
+  {
+    key: 'scan-item',
+    icon: 'camera',
+    title: 'AI 拍照 / 截图录入衣物',
+    path: '/scan',
+    query: { mode: 'item' } as Record<string, string>,
+  },
+  {
+    key: 'scan-inspiration',
+    icon: 'scan',
+    title: 'AI 街拍拆解找同款',
+    path: '/scan',
+    query: { mode: 'inspiration' } as Record<string, string>,
+  },
+  {
+    key: 'lookbook',
+    icon: 'layers',
+    title: '智能平铺搭配画板',
+    path: '/lookbook',
+    query: undefined as Record<string, string> | undefined,
+  },
 ];
 
 const activeDockIndex = computed(() => {
@@ -75,14 +93,6 @@ function goQuickAction(path: string, query?: Record<string, string>) {
   router.push(query ? { path, query } : { path });
 }
 
-function handleLogout() {
-  createSheetOpen.value = false;
-  authStore.logout();
-  wardrobeStore.reset();
-  lookbookStore.reset();
-  toast.show('已安全退出登录，可切换其他账号体验多用户隔离');
-  router.replace('/login');
-}
 </script>
 
 <template>
@@ -112,24 +122,7 @@ function handleLogout() {
           </span>
         </div>
 
-        <!-- Center: Lightweight Secondary Module Links (Desktop) -->
-        <div class="hidden md:flex items-center gap-1 bg-[#F5F5F5] p-1 rounded-full">
-          <button
-            v-for="link in quickHeaderLinks"
-            :key="link.name"
-            @click="router.push(link.path)"
-            class="px-3.5 py-1 rounded-full text-[12.5px] font-medium transition"
-            :class="
-              route.name === link.name
-                ? 'bg-black text-white shadow-sm'
-                : 'text-[#666666] hover:text-black'
-            "
-          >
-            {{ link.label }}
-          </button>
-        </div>
-
-        <!-- Right: Active Try-On Pill + Weather Capsule + User Trigger -->
+        <!-- Right: Active Try-On Pill + Weather Capsule -->
         <div class="flex items-center gap-2 shrink-0">
           <button
             v-if="lookbookStore.activeTryOnJobs.length > 0 && route.name !== 'lookbook'"
@@ -152,22 +145,6 @@ function handleLogout() {
             />
             <span class="hidden sm:inline text-[#666666]">{{ wardrobeStore.activeWeather.city }}</span>
             <span class="font-mono font-medium">{{ wardrobeStore.activeWeather.temp }}°C</span>
-          </button>
-
-          <button
-            @click="router.push('/calendar')"
-            title="穿搭日历与收藏"
-            class="md:hidden w-8 h-8 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] flex items-center justify-center text-black transition"
-          >
-            <AppIcon name="calendar" :size="15" />
-          </button>
-
-          <button
-            @click="handleLogout"
-            title="退出登录 / 切换账号"
-            class="w-8 h-8 rounded-full bg-[#F5F5F5] hover:bg-black hover:text-white flex items-center justify-center text-[#666666] transition"
-          >
-            <AppIcon name="log-out" :size="14" />
           </button>
         </div>
       </div>
@@ -268,80 +245,21 @@ function handleLogout() {
         @click.self="createSheetOpen = false"
       >
         <div
-          class="modal-sheet w-full max-w-[420px] bg-white rounded-[28px] border border-black/[0.08] shadow-float p-5 space-y-2.5"
+          role="dialog"
+          aria-label="新建"
+          class="modal-sheet w-full max-w-[420px] bg-white rounded-[28px] border border-black/[0.08] shadow-float p-4 space-y-2.5"
         >
-          <div class="flex items-center justify-between px-1 pb-1">
-            <span class="text-[13px] font-medium text-[#666666]">快捷创作与搭配入口</span>
-            <button
-              @click="createSheetOpen = false"
-              class="w-7 h-7 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] flex items-center justify-center text-black"
-            >
-              <AppIcon name="x" :size="14" />
-            </button>
-          </div>
-
           <button
-            @click="goQuickAction('/scan', { mode: 'item' })"
+            v-for="action in createActions"
+            :key="action.key"
+            @click="goQuickAction(action.path, action.query)"
             class="w-full p-3.5 rounded-2xl bg-[#F5F5F5] hover:bg-black hover:text-white transition flex items-center justify-between group text-left"
           >
             <div class="flex items-center gap-3">
               <div class="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center shadow-sm">
-                <AppIcon name="camera" :size="18" />
+                <AppIcon :name="action.icon" :size="18" />
               </div>
-              <div>
-                <div class="text-[14px] font-semibold">AI 拍照 / 截图录入衣物</div>
-                <div class="text-[11.5px] opacity-65 mt-0.5">自动抠图打标，支持填写购入价追踪 CPW</div>
-              </div>
-            </div>
-            <AppIcon name="arrow-right" :size="16" class="opacity-60 group-hover:translate-x-0.5 transition" />
-          </button>
-
-          <button
-            @click="goQuickAction('/scan', { mode: 'inspiration' })"
-            class="w-full p-3.5 rounded-2xl bg-[#F5F5F5] hover:bg-black hover:text-white transition flex items-center justify-between group text-left"
-          >
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center shadow-sm">
-                <AppIcon name="scan" :size="18" />
-              </div>
-              <div>
-                <div class="text-[14px] font-semibold">AI 街拍拆解找同款</div>
-                <div class="text-[11.5px] opacity-65 mt-0.5">上传全身街拍，先查衣橱已有款再推平替</div>
-              </div>
-            </div>
-            <AppIcon name="arrow-right" :size="16" class="opacity-60 group-hover:translate-x-0.5 transition" />
-          </button>
-
-          <button
-            @click="goQuickAction('/lookbook')"
-            class="w-full p-3.5 rounded-2xl bg-[#F5F5F5] hover:bg-black hover:text-white transition flex items-center justify-between group text-left"
-          >
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center shadow-sm">
-                <AppIcon name="layers" :size="18" />
-              </div>
-              <div>
-                <div class="text-[14px] font-semibold">智能平铺搭配画板</div>
-                <div class="text-[11.5px] opacity-65 mt-0.5">天气驱动 / 场景定制 / 单品锚点一衣多搭</div>
-              </div>
-            </div>
-            <AppIcon name="arrow-right" :size="16" class="opacity-60 group-hover:translate-x-0.5 transition" />
-          </button>
-
-          <button
-            @click="goQuickAction('/calendar')"
-            class="w-full p-3.5 rounded-2xl bg-[#F5F5F5] hover:bg-black hover:text-white transition flex items-center justify-between group text-left"
-          >
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center shadow-sm">
-                <AppIcon name="calendar" :size="18" />
-              </div>
-              <div>
-                <div class="text-[14px] font-semibold">穿搭日历与收藏方案</div>
-                <div class="text-[11.5px] opacity-65 mt-0.5">
-                  已记录 {{ lookbookStore.history.length }} 天档案 · {{ lookbookStore.favorites.length }} 套收藏
-                </div>
-              </div>
+              <div class="text-[14px] font-semibold">{{ action.title }}</div>
             </div>
             <AppIcon name="arrow-right" :size="16" class="opacity-60 group-hover:translate-x-0.5 transition" />
           </button>

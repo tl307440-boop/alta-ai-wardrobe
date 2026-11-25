@@ -213,7 +213,7 @@ function downloadPreview() {
         </div>
         <button
           type="button"
-          @click="router.push('/profile')"
+          @click="router.push({ path: '/profile', query: { tab: 'settings', panel: 'ai' } })"
           class="text-[11.5px] text-[#666666] hover:text-black underline"
         >
           配置中转站 / 生图模型 →

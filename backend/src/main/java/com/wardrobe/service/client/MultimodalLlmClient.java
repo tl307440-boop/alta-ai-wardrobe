@@ -122,6 +122,42 @@ public class MultimodalLlmClient {
         return callVisionForJson(creds, systemPrompt, userText, imageDataUri);
     }
 
+    /**
+     * Multi-garment detection for wardrobe ingestion: one photo (e.g. a full outfit) in, N structured items
+     * with a normalized bounding box each out, so the client can crop and cut out every piece individually.
+     */
+    public JsonNode detectClothingItems(AiConfigService.ResolvedAiCredentials creds, String imageDataUri, String sourceType) {
+        String systemPrompt = """
+                你是专业服装多模态识别专家。请识别图片中所有彼此独立、清晰可见的服装 / 鞋靴 / 包袋配饰单品（例如一张穿搭照里的上衣、裤子、鞋子），逐件输出结构化属性与位置框，仅返回严格合法的 JSON 对象，禁止输出 Markdown 代码围栏或额外说明文字：
+                {
+                  "isClothing": true,
+                  "items": [
+                    {
+                      "name": "米白针织开衫",
+                      "category": "outerwear",
+                      "subCategory": "针织开衫",
+                      "color": "米白",
+                      "colorHex": "#F3EDE2",
+                      "season": "spring,autumn",
+                      "thickness": 2,
+                      "styleTags": ["温柔韩系", "极简通勤"],
+                      "material": "羊毛混纺",
+                      "bbox": [0.18, 0.12, 0.64, 0.38]
+                    }
+                  ]
+                }
+                规则：
+                - category 仅允许 outerwear / top / bottom / shoes / accessory；season 为逗号分隔的 spring,summer,autumn,winter；thickness 为 1 薄夏 / 2 适中春秋 / 3 厚冬；styleTags 为 2~4 个中文风格标签。
+                - 只列真实可见的单品，不要臆造；完全被遮挡的不要列；图中只有一件就只返回一件；最多 8 件。
+                - bbox 是该单品在整张图片中的紧致外接框，四个数都是 0~1 的小数：[x, y, w, h]，x、y 为框左上角相对图片宽、高的比例，w、h 为框宽、高占图片宽、高的比例。
+                - 如果图片不是服装（风景、宠物、纯文档等），返回 {"isClothing": false, "items": []}。
+                """;
+        String userText = "screenshot".equalsIgnoreCase(sourceType)
+                ? "这是一张电商商品/订单截图，请综合图片主体与截图文字，逐件识别服装单品并输出 JSON。"
+                : "这是一张衣物或穿搭实物图，请忽略背景杂物，逐件识别其中的服装单品、给出每件的位置框并输出 JSON。";
+        return callVisionForJson(creds, systemPrompt, userText, imageDataUri);
+    }
+
     public JsonNode analyzeStreetInspiration(AiConfigService.ResolvedAiCredentials creds, String imageDataUri,
                                              String userQuery, String budgetStr) {
         String systemPrompt = """

@@ -232,13 +232,13 @@ async function handleRecordToday() {
 <template>
   <section class="space-y-5">
     <!-- Top Trigger & Budget Control Bar -->
-    <div class="bg-white rounded-3xl border border-oat-300 shadow-card p-5 space-y-4">
+    <div class="bg-white rounded-3xl border border-black/[0.08] p-5 space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="inline-flex flex-wrap p-1 rounded-2xl bg-oat-100 border border-oat-300 gap-1">
+        <div class="inline-flex flex-wrap p-1 rounded-2xl bg-[#F5F5F5] border border-black/[0.08] gap-1">
           <button
             @click="setTriggerMode('weather')"
             class="px-4 py-1.5 rounded-xl text-[13px] font-medium transition flex items-center gap-1.5"
-            :class="lookbookStore.triggerMode === 'weather' ? 'bg-charcoal text-white shadow-sm' : 'text-warmgray hover:text-charcoal'"
+            :class="lookbookStore.triggerMode === 'weather' ? 'bg-black text-white shadow-sm' : 'text-[#666666] hover:text-black'"
           >
             <AppIcon name="cloud-sun" :size="15" />
             今日天气驱动
@@ -246,7 +246,7 @@ async function handleRecordToday() {
           <button
             @click="setTriggerMode('nl')"
             class="px-4 py-1.5 rounded-xl text-[13px] font-medium transition flex items-center gap-1.5"
-            :class="lookbookStore.triggerMode === 'nl' ? 'bg-charcoal text-white shadow-sm' : 'text-warmgray hover:text-charcoal'"
+            :class="lookbookStore.triggerMode === 'nl' ? 'bg-black text-white shadow-sm' : 'text-[#666666] hover:text-black'"
           >
             <AppIcon name="message" :size="15" />
             自然语言场景定制
@@ -254,7 +254,7 @@ async function handleRecordToday() {
           <button
             @click="setTriggerMode('anchor')"
             class="px-4 py-1.5 rounded-xl text-[13px] font-medium transition flex items-center gap-1.5"
-            :class="lookbookStore.triggerMode === 'anchor' ? 'bg-charcoal text-white shadow-sm' : 'text-warmgray hover:text-charcoal'"
+            :class="lookbookStore.triggerMode === 'anchor' ? 'bg-black text-white shadow-sm' : 'text-[#666666] hover:text-black'"
           >
             <AppIcon name="pin" :size="15" />
             单品锚点一衣多搭
@@ -269,7 +269,7 @@ async function handleRecordToday() {
             :class="
               lookbookStore.reviveIdle
                 ? 'bg-black text-white border-black'
-                : 'bg-white text-[#555555] border-oat-300 hover:border-black hover:text-black'
+                : 'bg-white text-[#555555] border-black/[0.08] hover:border-black hover:text-black'
             "
           >
             <AppIcon name="sparkles" :size="13" />
@@ -277,16 +277,16 @@ async function handleRecordToday() {
           </button>
 
           <div class="flex items-center gap-2">
-            <span class="text-warmgray">缺品导购预算 ≤</span>
+            <span class="text-[#666666]">缺品导购预算 ≤</span>
             <div class="relative flex items-center">
-              <span class="absolute left-2.5 font-mono text-warmgray text-[12px]">¥</span>
+              <span class="absolute left-2.5 font-mono text-[#666666] text-[12px]">¥</span>
               <input
                 v-model.number="lookbookStore.budget"
                 type="number"
                 min="100"
                 max="1000"
                 step="20"
-                class="w-24 pl-6 pr-2 py-1 rounded-xl bg-oat-50 border border-oat-300 font-mono font-semibold text-charcoal outline-none focus:border-charcoal"
+                class="w-24 pl-6 pr-2 py-1 rounded-xl bg-[#FAFAFA] border border-black/[0.08] font-mono font-semibold text-black outline-none focus:border-black"
               />
             </div>
           </div>
@@ -294,14 +294,14 @@ async function handleRecordToday() {
       </div>
 
       <!-- Mode 1: Weather -->
-      <div v-if="lookbookStore.triggerMode === 'weather'" class="flex flex-wrap items-center gap-2.5 pt-2 border-t border-oat-200">
+      <div v-if="lookbookStore.triggerMode === 'weather'" class="flex flex-wrap items-center gap-2.5 pt-2 border-t border-black/[0.06]">
         <button
           @click="selectLiveWeather"
           class="px-3.5 py-1.5 rounded-full text-[12.5px] font-medium border transition flex items-center gap-1.5"
           :class="
             wardrobeStore.usingLiveWeather
-              ? 'bg-emerald-50 border-emerald-400 text-emerald-800 shadow-sm'
-              : 'bg-white border-oat-300 text-charcoal-soft hover:bg-oat-100'
+              ? 'bg-black border-black text-white'
+              : 'bg-white border-black/[0.08] text-[#333333] hover:bg-[#F5F5F5]'
           "
         >
           <span class="w-2 h-2 rounded-full bg-emerald-500" />
@@ -312,7 +312,7 @@ async function handleRecordToday() {
           </span>
         </button>
 
-        <span class="text-[12px] text-warmgray ml-1">模拟温差演示：</span>
+        <span class="text-[12px] text-[#666666] ml-1">模拟温差演示：</span>
         <button
           v-for="(w, idx) in WEATHER_PRESETS"
           :key="w.id"
@@ -320,8 +320,8 @@ async function handleRecordToday() {
           class="px-3.5 py-1.5 rounded-full text-[12.5px] font-medium border transition flex items-center gap-1.5"
           :class="
             !wardrobeStore.usingLiveWeather && wardrobeStore.weatherPresetIdx === idx
-              ? 'bg-terracotta-light border-terracotta text-terracotta-dark'
-              : 'bg-oat-50 border-oat-300 text-charcoal-soft hover:bg-oat-100'
+              ? 'bg-[#F2F2F2] border-black text-black'
+              : 'bg-[#FAFAFA] border-black/[0.08] text-[#333333] hover:bg-[#F5F5F5]'
           "
         >
           <AppIcon :name="w.icon" :size="14" />
@@ -330,30 +330,30 @@ async function handleRecordToday() {
       </div>
 
       <!-- Mode 2: Natural Language -->
-      <div v-if="lookbookStore.triggerMode === 'nl'" class="space-y-3 pt-2 border-t border-oat-200">
+      <div v-if="lookbookStore.triggerMode === 'nl'" class="space-y-3 pt-2 border-t border-black/[0.06]">
         <div class="flex flex-col sm:flex-row gap-2.5">
           <input
             v-model="lookbookStore.nlQuery"
             @keyup.enter="generateNLLook"
             type="text"
             placeholder="例如：明天去互联网公司面试，想要精神但别太死板的搭配..."
-            class="flex-1 px-4 py-2.5 rounded-2xl bg-oat-50 border border-oat-300 focus:border-charcoal focus:bg-white outline-none text-[13.5px]"
+            class="flex-1 px-4 py-2.5 rounded-2xl bg-[#FAFAFA] border border-black/[0.08] focus:border-black focus:bg-white outline-none text-[13.5px]"
           />
           <button
             @click="generateNLLook"
             :disabled="lookbookStore.loading"
-            class="px-5 py-2.5 rounded-2xl bg-charcoal hover:bg-charcoal-hover text-white text-[13px] font-medium transition shrink-0"
+            class="px-5 py-2.5 rounded-2xl bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition shrink-0"
           >
             {{ lookbookStore.loading ? '生成中...' : '生成定制方案' }}
           </button>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[12px] text-warmgray">快捷场景：</span>
+          <span class="text-[12px] text-[#666666]">快捷场景：</span>
           <button
             v-for="sc in QUICK_SCENARIOS"
             :key="sc.label"
             @click="applyQuickScenario(sc)"
-            class="px-3 py-1 rounded-full bg-oat-100 hover:bg-terracotta-light hover:text-terracotta-dark text-[12px] text-charcoal-soft transition"
+            class="px-3 py-1 rounded-full bg-[#F5F5F5] hover:bg-[#F2F2F2] hover:text-[#666666]-dark text-[12px] text-[#333333] transition"
           >
             {{ sc.label }}
           </button>
@@ -361,26 +361,26 @@ async function handleRecordToday() {
       </div>
 
       <!-- Mode 3: Anchor Item -->
-      <div v-if="lookbookStore.triggerMode === 'anchor'" class="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-oat-200">
+      <div v-if="lookbookStore.triggerMode === 'anchor'" class="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-black/[0.06]">
         <div class="flex items-center gap-3">
-          <span class="text-[12px] text-warmgray">当前锁定锚点单品：</span>
+          <span class="text-[12px] text-[#666666]">当前锁定锚点单品：</span>
           <div
             v-if="anchorItem"
-            class="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-2xl bg-terracotta-light/70 border border-terracotta/40"
+            class="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-2xl bg-[#F5F5F5] border border-black/30"
           >
             <div class="w-7 h-7 rounded-lg bg-white p-0.5">
               <GarmentVisual :image-url="anchorItem.processedImageUrl" :svg-type="anchorItem.svgType" :color-hex="anchorItem.colorHex" />
             </div>
-            <span class="text-[13px] font-semibold text-charcoal">{{ anchorItem.name }}</span>
+            <span class="text-[13px] font-semibold text-black">{{ anchorItem.name }}</span>
           </div>
-          <span v-else class="text-[12px] text-warmgray">请先录入衣物</span>
+          <span v-else class="text-[12px] text-[#666666]">请先录入衣物</span>
         </div>
         <div v-if="wardrobeStore.items.length > 0" class="flex items-center gap-2">
-          <span class="text-[12px] text-warmgray">切换锚点：</span>
+          <span class="text-[12px] text-[#666666]">切换锚点：</span>
           <select
             :value="lookbookStore.anchorItemId"
             @change="changeAnchorById(Number(($event.target as HTMLSelectElement).value))"
-            class="px-3 py-1.5 rounded-xl bg-oat-50 border border-oat-300 text-[12.5px] text-charcoal outline-none"
+            class="px-3 py-1.5 rounded-xl bg-[#FAFAFA] border border-black/[0.08] text-[12.5px] text-black outline-none"
           >
             <option v-for="item in wardrobeStore.items" :key="item.id" :value="item.id">
               {{ item.name }} ({{ categoryLabel(item.category) }})
@@ -393,24 +393,24 @@ async function handleRecordToday() {
     <!-- Main Split: Left Flat-Lay Canvas + Right Owned/Missing Panel -->
     <div v-if="lookbookStore.currentPlan" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <!-- Left 7-Col Flat-Lay Canvas -->
-      <div class="lg:col-span-7 bg-white rounded-3xl border border-oat-300 shadow-editorial overflow-hidden flex flex-col">
-        <div class="px-6 pt-6 pb-4 flex flex-wrap items-start justify-between gap-3 border-b border-oat-200/80">
+      <div class="lg:col-span-7 bg-white rounded-3xl border border-black/[0.08] overflow-hidden flex flex-col">
+        <div class="px-6 pt-6 pb-4 flex flex-wrap items-start justify-between gap-3 border-b border-black/[0.06]">
           <div>
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="px-2.5 py-0.5 rounded-full bg-oat-100 border border-oat-300 text-[11px] font-medium text-charcoal-soft">
+              <span class="px-2.5 py-0.5 rounded-full bg-[#F5F5F5] border border-black/[0.08] text-[11px] font-medium text-[#333333]">
                 {{ lookbookStore.currentPlan.sceneTag }}
               </span>
-              <span class="font-mono text-[11.5px] text-terracotta font-semibold">
+              <span class="font-mono text-[11.5px] text-black font-semibold">
                 综合匹配度 {{ lookbookStore.currentPlan.matchScore }}%
               </span>
               <span
                 v-if="lookbookStore.currentPlan.usedRealLlm"
-                class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10.5px] font-mono"
+                class="px-2 py-0.5 rounded-full bg-[#F5F5F5] text-black border border-black/[0.08] text-[10.5px] font-mono"
               >
                 LLM 精排
               </span>
             </div>
-            <h3 class="font-serif text-2xl font-semibold text-charcoal mt-1.5">
+            <h3 class="text-2xl font-semibold text-black mt-1.5">
               {{ lookbookStore.currentPlan.themeTitle }}
             </h3>
           </div>
@@ -420,7 +420,7 @@ async function handleRecordToday() {
               @click="handleDislikePlan"
               :disabled="lookbookStore.loading"
               title="不太喜欢这套，降低该风格权重并立即换一套"
-              class="inline-flex items-center gap-1 px-3 py-2 rounded-full border border-oat-300 bg-white hover:border-black text-[12px] font-medium text-[#555555] hover:text-black transition disabled:opacity-50"
+              class="inline-flex items-center gap-1 px-3 py-2 rounded-full border border-black/[0.08] bg-white hover:border-black text-[12px] font-medium text-[#555555] hover:text-black transition disabled:opacity-50"
             >
               <AppIcon name="refresh" :size="13" />
               不太喜欢
@@ -430,8 +430,8 @@ async function handleRecordToday() {
               class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border text-[12.5px] font-medium transition"
               :class="
                 lookbookStore.currentPlan.favorite
-                  ? 'bg-terracotta-light border-terracotta text-terracotta-dark'
-                  : 'bg-white border-oat-300 text-charcoal hover:bg-oat-100'
+                  ? 'bg-[#F2F2F2] border-black text-black'
+                  : 'bg-white border-black/[0.08] text-black hover:bg-[#F5F5F5]'
               "
             >
               <AppIcon name="heart" :size="15" :fill="lookbookStore.currentPlan.favorite ? '#000000' : 'none'" />
@@ -439,7 +439,7 @@ async function handleRecordToday() {
             </button>
             <button
               @click="handleRecordToday"
-              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-charcoal hover:bg-charcoal-hover text-white text-[12.5px] font-medium shadow-sm transition"
+              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-black hover:bg-[#262626] text-white text-[12.5px] font-medium shadow-sm transition"
             >
               <AppIcon name="calendar" :size="14" />
               记录为今日穿搭
@@ -483,7 +483,7 @@ async function handleRecordToday() {
                 AI 上身预览
               </button>
             </div>
-            <span class="font-mono text-[11.5px] text-warmgray">{{ lookbookStore.currentPlan.slots.length }} PIECES</span>
+            <span class="font-mono text-[11.5px] text-[#666666]">{{ lookbookStore.currentPlan.slots.length }} PIECES</span>
           </div>
 
           <!-- Mode 1: Classic Flat-Lay Grid -->
@@ -492,9 +492,9 @@ async function handleRecordToday() {
               <div
                 v-for="(slot, idx) in lookbookStore.currentPlan.slots"
                 :key="`${slot.slotKey}-${slot.item.id}-${idx}`"
-                class="relative bg-white/95 rounded-2xl border p-3.5 shadow-card hover:shadow-editorial transition-all duration-300 group flex flex-col justify-between"
+                class="relative bg-white/95 rounded-2xl border p-3.5 hover:border-black/20 transition-all duration-300 group flex flex-col justify-between"
                 :class="[
-                  slot.missing ? 'border-terracotta/60 border-dashed' : 'border-oat-300/90',
+                  slot.missing ? 'border-black/30 border-dashed' : 'border-black/[0.08]',
                   idx === 0 ? 'sm:row-span-2' : '',
                 ]"
               >
@@ -503,10 +503,10 @@ async function handleRecordToday() {
                     class="text-[10.5px] font-medium px-2 py-0.5 rounded-full"
                     :class="
                       slot.missing
-                        ? 'bg-terracotta-light text-terracotta-dark'
+                        ? 'bg-[#F2F2F2] text-black'
                         : slot.anchor
-                          ? 'bg-charcoal text-white'
-                          : 'bg-oat-100 text-warmgray'
+                          ? 'bg-black text-white'
+                          : 'bg-[#F5F5F5] text-[#666666]'
                     "
                   >
                     {{ slot.anchor ? '★ 核心锚点' : slot.missing ? '建议购入' : slot.slotLabel }}
@@ -515,7 +515,7 @@ async function handleRecordToday() {
                     v-if="!slot.anchor"
                     @click="handleSwapSlot(slot.slotKey, slot.item.id)"
                     title="局部换一件同品类单品"
-                    class="w-7 h-7 rounded-full bg-oat-100 hover:bg-charcoal hover:text-white text-charcoal-soft flex items-center justify-center transition active:rotate-180 duration-300"
+                    class="w-7 h-7 rounded-full bg-[#F5F5F5] hover:bg-black hover:text-white text-[#333333] flex items-center justify-center transition active:rotate-180 duration-300"
                   >
                     <AppIcon name="refresh" :size="13" />
                   </button>
@@ -529,12 +529,12 @@ async function handleRecordToday() {
                     class="max-h-[180px] transition-transform duration-300 group-hover:scale-105"
                   />
                 </div>
-                <div class="pt-2 border-t border-oat-100">
-                  <div class="text-[12.5px] font-semibold text-charcoal truncate">{{ slot.item.name }}</div>
+                <div class="pt-2 border-t border-black/[0.06]">
+                  <div class="text-[12.5px] font-semibold text-black truncate">{{ slot.item.name }}</div>
                   <div class="flex items-center justify-between mt-0.5 text-[11px]">
-                    <span class="text-warmgray">{{ slot.item.color }}</span>
-                    <span v-if="!slot.missing" class="text-emerald-700 font-medium">已拥有</span>
-                    <span v-else class="text-terracotta font-medium">缺品槽位</span>
+                    <span class="text-[#666666]">{{ slot.item.color }}</span>
+                    <span v-if="!slot.missing" class="text-[#666666] font-medium">已拥有</span>
+                    <span v-else class="text-black font-medium">缺品槽位</span>
                   </div>
                 </div>
               </div>
@@ -556,24 +556,24 @@ async function handleRecordToday() {
             :plan="lookbookStore.currentPlan"
           />
 
-          <div class="mt-5 p-4 rounded-2xl bg-white/90 border border-oat-300/80">
-            <div class="flex items-center gap-1.5 text-[12px] font-semibold text-terracotta-dark mb-1">
+          <div class="mt-5 p-4 rounded-2xl bg-white/90 border border-black/[0.08]">
+            <div class="flex items-center gap-1.5 text-[12px] font-semibold text-black mb-1">
               <AppIcon name="sparkles" :size="14" />
               AI 造型师搭配逻辑
             </div>
-            <p class="text-[13px] text-charcoal-soft leading-relaxed">{{ lookbookStore.currentPlan.aiReasoning }}</p>
+            <p class="text-[13px] text-[#333333] leading-relaxed">{{ lookbookStore.currentPlan.aiReasoning }}</p>
           </div>
         </div>
 
         <!-- Multi-Turn Refinement Bar -->
-        <div class="p-4 bg-oat-50 border-t border-oat-200 space-y-2.5">
+        <div class="p-4 bg-[#FAFAFA] border-t border-black/[0.06] space-y-2.5">
           <div class="flex flex-wrap items-center gap-1.5">
-            <span class="text-[11.5px] text-warmgray mr-1">多轮微调：</span>
+            <span class="text-[11.5px] text-[#666666] mr-1">多轮微调：</span>
             <button
               v-for="chip in REFINE_CHIPS"
               :key="chip"
               @click="applyRefinement(chip)"
-              class="px-2.5 py-1 rounded-full bg-white hover:bg-terracotta-light border border-oat-300 hover:border-terracotta/50 text-[11.5px] text-charcoal transition"
+              class="px-2.5 py-1 rounded-full bg-white hover:bg-[#F2F2F2] border border-black/[0.08] hover:border-black/30 text-[11.5px] text-black transition"
             >
               {{ chip }}
             </button>
@@ -584,12 +584,12 @@ async function handleRecordToday() {
               @keyup.enter="applyRefinement(refineInput)"
               type="text"
               placeholder="继续对话微调搭配，如：把裤子换成黑色阔腿裤 / 换一双更休闲的鞋..."
-              class="flex-1 px-3.5 py-2 rounded-xl bg-white border border-oat-300 focus:border-charcoal outline-none text-[13px]"
+              class="flex-1 px-3.5 py-2 rounded-xl bg-white border border-black/[0.08] focus:border-black outline-none text-[13px]"
             />
             <button
               @click="applyRefinement(refineInput)"
               :disabled="lookbookStore.loading"
-              class="px-4 py-2 rounded-xl bg-charcoal hover:bg-charcoal-hover text-white text-[12.5px] font-medium transition"
+              class="px-4 py-2 rounded-xl bg-black hover:bg-[#262626] text-white text-[12.5px] font-medium transition"
             >
               微调
             </button>
@@ -599,10 +599,10 @@ async function handleRecordToday() {
 
       <!-- Right 5-Col Reuse & Commerce Panel -->
       <div class="lg:col-span-5 flex flex-col gap-5">
-        <div class="bg-white rounded-3xl border border-oat-300 shadow-card p-5">
+        <div class="bg-white rounded-3xl border border-black/[0.08] p-5">
           <div class="flex items-center justify-between mb-3.5">
-            <h4 class="font-serif text-[16px] font-semibold text-charcoal">衣橱里可以这样搭</h4>
-            <span class="text-[11.5px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <h4 class="text-[16px] font-semibold text-black">衣橱里可以这样搭</h4>
+            <span class="text-[11.5px] font-mono px-2.5 py-0.5 rounded-full bg-[#F5F5F5] text-black border border-black/[0.08]">
               复用 {{ ownedSlots.length }} 件已有衣物
             </span>
           </div>
@@ -611,10 +611,10 @@ async function handleRecordToday() {
               v-for="slot in ownedSlots"
               :key="slot.item.id"
               @click="wardrobeStore.drawerItem = slot.item"
-              class="flex items-center justify-between gap-3 p-2.5 rounded-2xl bg-oat-50 hover:bg-oat-100 border border-oat-200/80 cursor-pointer transition"
+              class="flex items-center justify-between gap-3 p-2.5 rounded-2xl bg-[#FAFAFA] hover:bg-[#F5F5F5] border border-black/[0.06] cursor-pointer transition"
             >
               <div class="flex items-center gap-3 min-w-0">
-                <div class="w-11 h-11 rounded-xl bg-white border border-oat-200 p-1 shrink-0">
+                <div class="w-11 h-11 rounded-xl bg-white border border-black/[0.06] p-1 shrink-0">
                   <GarmentVisual
                     :image-url="slot.item.processedImageUrl"
                     :svg-type="slot.item.svgType"
@@ -623,37 +623,37 @@ async function handleRecordToday() {
                   />
                 </div>
                 <div class="min-w-0">
-                  <div class="text-[13px] font-semibold text-charcoal truncate">{{ slot.item.name }}</div>
-                  <div class="text-[11.5px] text-warmgray">{{ slot.slotLabel }} · {{ slot.item.color }}</div>
+                  <div class="text-[13px] font-semibold text-black truncate">{{ slot.item.name }}</div>
+                  <div class="text-[11.5px] text-[#666666]">{{ slot.slotLabel }} · {{ slot.item.color }}</div>
                 </div>
               </div>
-              <span class="shrink-0 px-2.5 py-0.5 rounded-full bg-emerald-100/80 text-emerald-800 text-[11px] font-medium">
+              <span class="shrink-0 px-2.5 py-0.5 rounded-full bg-[#F5F5F5] text-black text-[11px] font-medium">
                 已拥有
               </span>
             </div>
           </div>
-          <div v-else class="py-6 text-center text-[12.5px] text-warmgray bg-oat-50 rounded-2xl">
+          <div v-else class="py-6 text-center text-[12.5px] text-[#666666] bg-[#FAFAFA] rounded-2xl">
             当前账号暂无可复用的已有衣物，以下为您提供导购补充推荐
           </div>
         </div>
 
-        <div class="bg-white rounded-3xl border border-oat-300 shadow-card p-5 flex-1 flex flex-col justify-between">
+        <div class="bg-white rounded-3xl border border-black/[0.08] p-5 flex-1 flex flex-col justify-between">
           <div>
             <div class="flex items-center justify-between mb-3">
               <div>
-                <h4 class="font-serif text-[16px] font-semibold text-charcoal">缺品补全 · 预算内相似商品</h4>
-                <p class="text-[11.5px] text-warmgray mt-0.5">
-                  当前筛选条件：单品价格 ≤ <span class="font-mono font-semibold text-charcoal">¥{{ lookbookStore.budget }}</span>
+                <h4 class="text-[16px] font-semibold text-black">缺品补全 · 预算内相似商品</h4>
+                <p class="text-[11.5px] text-[#666666] mt-0.5">
+                  当前筛选条件：单品价格 ≤ <span class="font-mono font-semibold text-black">¥{{ lookbookStore.budget }}</span>
                 </p>
               </div>
-              <span class="w-8 h-8 rounded-xl bg-terracotta-light text-terracotta-dark flex items-center justify-center">
+              <span class="w-8 h-8 rounded-xl bg-[#F2F2F2] text-black flex items-center justify-center">
                 <AppIcon name="shopping-bag" :size="16" />
               </span>
             </div>
 
             <div
               v-if="missingSlot"
-              class="p-3 rounded-2xl bg-terracotta-light/55 border border-terracotta/30 mb-3.5 text-[12px] text-terracotta-dark"
+              class="p-3 rounded-2xl bg-[#F5F5F5] border border-black/30 mb-3.5 text-[12px] text-black"
             >
               <strong>缺品建议：</strong>你的衣橱缺少一件「{{ missingSlot.item.name }}」，补齐后可将本套搭配适配度提升至
               <span class="font-mono font-semibold">{{ lookbookStore.currentPlan.matchScore }}%</span>。
@@ -663,9 +663,9 @@ async function handleRecordToday() {
               <div
                 v-for="prod in filteredProducts"
                 :key="prod.id"
-                class="p-3 rounded-2xl bg-oat-50 hover:bg-white border border-oat-200 hover:border-terracotta/60 transition flex items-center gap-3"
+                class="p-3 rounded-2xl bg-[#FAFAFA] hover:bg-white border border-black/[0.06] hover:border-black/30 transition flex items-center gap-3"
               >
-                <div class="w-14 h-14 rounded-xl bg-white border border-oat-200 p-1.5 shrink-0">
+                <div class="w-14 h-14 rounded-xl bg-white border border-black/[0.06] p-1.5 shrink-0">
                   <GarmentVisual :image-url="prod.imageUrl" :svg-type="prod.svgType" :color-hex="prod.colorHex" :alt="prod.title" />
                 </div>
                 <div class="min-w-0 flex-1">
@@ -673,14 +673,14 @@ async function handleRecordToday() {
                     <span class="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0" :class="platformBadgeClass(prod.platform)">
                       {{ prod.platformLabel }}
                     </span>
-                    <h5 class="text-[13px] font-semibold text-charcoal truncate">{{ prod.title }}</h5>
+                    <h5 class="text-[13px] font-semibold text-black truncate">{{ prod.title }}</h5>
                   </div>
-                  <p class="text-[11.5px] text-warmgray mt-0.5 line-clamp-1">{{ prod.description }}</p>
+                  <p class="text-[11.5px] text-[#666666] mt-0.5 line-clamp-1">{{ prod.description }}</p>
                   <div class="flex items-center justify-between mt-1.5">
-                    <span class="font-mono text-[14px] font-semibold text-terracotta">¥{{ prod.price }}</span>
+                    <span class="font-mono text-[14px] font-semibold text-black">¥{{ prod.price }}</span>
                     <button
                       @click="wardrobeStore.activeProductModal = prod"
-                      class="px-3 py-1 rounded-full bg-charcoal hover:bg-charcoal-hover text-white text-[11px] font-medium transition"
+                      class="px-3 py-1 rounded-full bg-black hover:bg-[#262626] text-white text-[11px] font-medium transition"
                     >
                       查看同款外链 ↗
                     </button>
@@ -689,9 +689,9 @@ async function handleRecordToday() {
               </div>
             </div>
 
-            <div v-else class="py-8 text-center rounded-2xl bg-oat-50 border border-dashed border-oat-300">
-              <p class="text-[13px] text-charcoal font-medium">预算 ¥{{ lookbookStore.budget }} 内暂无匹配商品</p>
-              <p class="text-[12px] text-warmgray mt-1">可将上方预算调高至 ¥280 以上查看更多推荐</p>
+            <div v-else class="py-8 text-center rounded-2xl bg-[#FAFAFA] border border-dashed border-black/[0.08]">
+              <p class="text-[13px] text-black font-medium">预算 ¥{{ lookbookStore.budget }} 内暂无匹配商品</p>
+              <p class="text-[12px] text-[#666666] mt-1">可将上方预算调高至 ¥280 以上查看更多推荐</p>
             </div>
           </div>
         </div>
