@@ -196,6 +196,12 @@ export interface CollageNode {
   scale: number;
   rotation: number;
   zIndex: number;
+  flipX?: boolean;
+  customName?: string;
+  customImageUrl?: string;
+  customSvgType?: string;
+  customColorHex?: string;
+  labelText?: string;
 }
 
 export interface TryOnResult {

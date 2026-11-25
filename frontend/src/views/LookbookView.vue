@@ -51,7 +51,14 @@ function syncLookbookUrl(mode: 'grid' | 'collage' | 'tryon', planId?: number | n
   if (planId) {
     nextQuery.planId = String(planId);
   }
-  if (route.query.mode !== nextQuery.mode || route.query.planId !== nextQuery.planId) {
+  if (mode === 'collage' && route.query.studio === '1') {
+    nextQuery.studio = '1';
+  }
+  if (
+    route.query.mode !== nextQuery.mode ||
+    route.query.planId !== nextQuery.planId ||
+    (route.query.studio || undefined) !== nextQuery.studio
+  ) {
     router.replace({ path: '/lookbook', query: nextQuery });
   }
 }

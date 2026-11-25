@@ -50,10 +50,16 @@ public class OutfitDto {
         private Long itemId;
         private Double x;        // percentage 0..100
         private Double y;        // percentage 0..100
-        private Double scale;    // 0.5..1.8
-        private Double rotation; // degrees -30..30
+        private Double scale;    // 0.35..2.2
+        private Double rotation; // degrees -180..180
         @JsonProperty("zIndex")
         private Integer zIndex;
+        private Boolean flipX;
+        private String customName;
+        private String customImageUrl;
+        private String customSvgType;
+        private String customColorHex;
+        private String labelText;
     }
 
     @Data

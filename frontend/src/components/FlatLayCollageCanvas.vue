@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { CollageNode, OutfitPlanVo, PlanSlot } from '@/types';
+import { useRoute, useRouter } from 'vue-router';
+import type { CollageNode, OutfitPlanVo, PlanSlot, WardrobeItem } from '@/types';
+import { useWardrobeStore } from '@/stores/wardrobe';
 import { useToastStore } from '@/stores/toast';
 import AppIcon from './AppIcon.vue';
 import GarmentVisual from './GarmentVisual.vue';
+import FlatLayStudioModal from './FlatLayStudioModal.vue';
 
 const props = defineProps<{
   plan: OutfitPlanVo;
@@ -15,12 +18,48 @@ const emit = defineEmits<{
   (e: 'swap-slot', slotKey: string, currentItemId: number): void;
 }>();
 
+const route = useRoute();
+const router = useRouter();
+const wardrobeStore = useWardrobeStore();
 const toast = useToastStore();
+
 const canvasRef = ref<HTMLElement | null>(null);
 const nodes = ref<CollageNode[]>([]);
 const selectedKey = ref<string | null>(null);
 const exporting = ref(false);
 const hasUnsavedChanges = ref(false);
+const studioOpen = ref(route.query.studio === '1');
+
+watch(
+  () => route.query.studio,
+  (q) => {
+    studioOpen.value = q === '1';
+  }
+);
+
+function openStudio() {
+  studioOpen.value = true;
+  if (route.query.studio !== '1') {
+    router.replace({
+      path: route.path,
+      query: { ...route.query, mode: 'collage', studio: '1' },
+    });
+  }
+}
+
+function closeStudio() {
+  studioOpen.value = false;
+  if (route.query.studio) {
+    const nextQuery = { ...route.query };
+    delete nextQuery.studio;
+    router.replace({ path: route.path, query: nextQuery });
+  }
+}
+
+function openStandaloneWindow() {
+  const url = `${window.location.origin}/lookbook?mode=collage&planId=${props.plan.id}&studio=1`;
+  window.open(url, '_blank', 'noopener');
+}
 
 interface DragState {
   nodeKey: string;
@@ -37,10 +76,6 @@ function makeNodeKey(slot: PlanSlot, idx: number): string {
   return `${slot.slotKey}-${slot.item.id}-${idx}`;
 }
 
-/**
- * Editorial default flat-lay silhouette arrangement by garment category
- * so the canvas immediately looks like a curated magazine flat-lay.
- */
 function buildDefaultLayout(slots: PlanSlot[]): CollageNode[] {
   const categoryPresets: Record<string, { x: number; y: number; scale: number; rotation: number; zIndex: number }> = {
     outerwear: { x: 26, y: 31, scale: 1.18, rotation: -5, zIndex: 4 },
@@ -70,6 +105,7 @@ function buildDefaultLayout(slots: PlanSlot[]): CollageNode[] {
       scale: preset.scale,
       rotation: preset.rotation,
       zIndex: preset.zIndex + count,
+      flipX: false,
     };
   });
 }
@@ -83,11 +119,19 @@ function hydrateNodes(plan: OutfitPlanVo) {
     hasUnsavedChanges.value = false;
     return;
   }
-  nodes.value = defaults.map((def) => {
-    const match =
-      saved.find((s) => s.nodeKey === def.nodeKey) ||
-      saved.find((s) => s.itemId === def.itemId && s.slotKey === def.slotKey);
-    if (!match) return def;
+
+  // Reconcile slot items (in case user swapped a slot) while keeping any extra studio pieces/accessories/stamps
+  const usedSavedIndices = new Set<number>();
+  const mergedSlots: CollageNode[] = defaults.map((def) => {
+    let idx = saved.findIndex((s, i) => !usedSavedIndices.has(i) && s.nodeKey === def.nodeKey);
+    if (idx < 0) {
+      idx = saved.findIndex(
+        (s, i) => !usedSavedIndices.has(i) && !s.labelText && s.slotKey === def.slotKey && !s.nodeKey?.includes('-copy-') && !s.nodeKey?.startsWith('wardrobe-') && !s.nodeKey?.startsWith('acc-')
+      );
+    }
+    if (idx < 0) return def;
+    usedSavedIndices.add(idx);
+    const match = saved[idx];
     return {
       ...def,
       x: typeof match.x === 'number' ? match.x : def.x,
@@ -95,8 +139,15 @@ function hydrateNodes(plan: OutfitPlanVo) {
       scale: typeof match.scale === 'number' ? match.scale : def.scale,
       rotation: typeof match.rotation === 'number' ? match.rotation : def.rotation,
       zIndex: typeof match.zIndex === 'number' ? match.zIndex : def.zIndex,
+      flipX: Boolean(match.flipX),
     };
   });
+
+  const extraNodes: CollageNode[] = saved
+    .filter((_, i) => !usedSavedIndices.has(i))
+    .map((s) => ({ ...s }));
+
+  nodes.value = [...mergedSlots, ...extraNodes];
   hasUnsavedChanges.value = false;
 }
 
@@ -116,6 +167,46 @@ const slotMap = computed(() => {
   });
   return map;
 });
+
+const itemById = computed(() => {
+  const map: Record<number, WardrobeItem> = {};
+  for (const it of wardrobeStore.items) map[it.id] = it;
+  for (const s of props.plan.slots || []) map[s.item.id] = s.item;
+  return map;
+});
+
+function resolveNodeVisual(node: CollageNode) {
+  if (node.labelText) {
+    return { isText: true, name: node.labelText, imageUrl: '', svgType: undefined, colorHex: '#000000' };
+  }
+  const slot = slotMap.value[node.nodeKey];
+  if (slot) {
+    return {
+      isText: false,
+      name: slot.item.name,
+      imageUrl: slot.item.processedImageUrl,
+      svgType: slot.item.svgType,
+      colorHex: slot.item.colorHex,
+    };
+  }
+  if (node.itemId > 0 && itemById.value[node.itemId]) {
+    const it = itemById.value[node.itemId];
+    return {
+      isText: false,
+      name: it.name,
+      imageUrl: it.processedImageUrl,
+      svgType: it.svgType,
+      colorHex: it.colorHex,
+    };
+  }
+  return {
+    isText: false,
+    name: node.customName || '搭配单品',
+    imageUrl: node.customImageUrl,
+    svgType: node.customSvgType,
+    colorHex: node.customColorHex || '#EFECE6',
+  };
+}
 
 const selectedNode = computed(() => nodes.value.find((n) => n.nodeKey === selectedKey.value) || null);
 const selectedSlot = computed(() => (selectedKey.value ? slotMap.value[selectedKey.value] || null : null));
@@ -155,20 +246,26 @@ function onPointerUp() {
 function adjustScale(delta: number) {
   if (!selectedNode.value) return;
   selectedNode.value.scale = Number(
-    Math.max(0.55, Math.min(1.7, selectedNode.value.scale + delta)).toFixed(2)
+    Math.max(0.4, Math.min(2.0, selectedNode.value.scale + delta)).toFixed(2)
   );
   hasUnsavedChanges.value = true;
 }
 
 function adjustRotation(delta: number) {
   if (!selectedNode.value) return;
-  selectedNode.value.rotation = Math.max(-30, Math.min(30, selectedNode.value.rotation + delta));
+  selectedNode.value.rotation = Math.max(-90, Math.min(90, selectedNode.value.rotation + delta));
   hasUnsavedChanges.value = true;
 }
 
 function setRotation(val: number) {
   if (!selectedNode.value) return;
   selectedNode.value.rotation = val;
+  hasUnsavedChanges.value = true;
+}
+
+function toggleFlip() {
+  if (!selectedNode.value) return;
+  selectedNode.value.flipX = !selectedNode.value.flipX;
   hasUnsavedChanges.value = true;
 }
 
@@ -185,12 +282,6 @@ function sendToBack() {
   const minZ = Math.min(...nodes.value.map((n) => n.zIndex), 1);
   selectedNode.value.zIndex = minZ - 1;
   normalizeZ();
-  hasUnsavedChanges.value = true;
-}
-
-function stepZ(delta: number) {
-  if (!selectedNode.value) return;
-  selectedNode.value.zIndex = Math.max(1, selectedNode.value.zIndex + delta);
   hasUnsavedChanges.value = true;
 }
 
@@ -212,10 +303,17 @@ function handleSave() {
   hasUnsavedChanges.value = false;
 }
 
-/**
- * Pure native HTML5 Canvas export: renders current collage (positions, scale, rotation, zIndex)
- * into a crisp 1080x1350 pure-white Alta editorial PNG for sharing.
- */
+function handleStudioUpdateNodes(nextNodes: CollageNode[]) {
+  nodes.value = nextNodes.map((n) => ({ ...n }));
+  hasUnsavedChanges.value = true;
+}
+
+function handleStudioSave(nextNodes: CollageNode[]) {
+  nodes.value = nextNodes.map((n) => ({ ...n }));
+  emit('save-layout', nodes.value.map((n) => ({ ...n })));
+  hasUnsavedChanges.value = false;
+}
+
 async function exportCollagePng() {
   if (!canvasRef.value || exporting.value) return;
   exporting.value = true;
@@ -229,7 +327,6 @@ async function exportCollagePng() {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 不可用');
 
-    // Pure white Alta gallery background with faint editorial dot grid
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, outW, outH);
     ctx.fillStyle = '#FAFAFA';
@@ -243,16 +340,28 @@ async function exportCollagePng() {
       }
     }
 
-    // Draw nodes sorted by zIndex
     const ordered = [...nodes.value].sort((a, b) => a.zIndex - b.zIndex);
     for (const node of ordered) {
+      const cx = (node.x / 100) * (outW - 72) + 36;
+      const cy = (node.y / 100) * (stageH - 36) + 36;
+
+      if (node.labelText) {
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate((node.rotation * Math.PI) / 180);
+        ctx.font = '600 28px Inter, "Noto Sans SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#000000';
+        ctx.fillText(node.labelText, 0, 0);
+        ctx.restore();
+        continue;
+      }
+
       const domEl = canvasRef.value.querySelector(`[data-node-key="${CSS.escape(node.nodeKey)}"]`);
       if (!domEl) continue;
 
-      const cx = (node.x / 100) * (outW - 72) + 36;
-      const cy = (node.y / 100) * (stageH - 36) + 36;
       const baseBox = 300 * node.scale;
-
       let imgEl: HTMLImageElement | null = null;
       const rawImg = domEl.querySelector('img') as HTMLImageElement | null;
       const rawSvg = domEl.querySelector('svg') as SVGSVGElement | null;
@@ -261,7 +370,7 @@ async function exportCollagePng() {
         imgEl = await loadImageSafe(rawImg.src);
       } else if (rawSvg) {
         const cloned = rawSvg.cloneNode(true) as SVGSVGElement;
-        cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        cloned.setAttribute('xmlns', 'http://www.w3.org/www.w3.org/2000/svg');
         if (!cloned.getAttribute('width')) cloned.setAttribute('width', '320');
         if (!cloned.getAttribute('height')) cloned.setAttribute('height', '320');
         const svgStr = new XMLSerializer().serializeToString(cloned);
@@ -273,6 +382,7 @@ async function exportCollagePng() {
         ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate((node.rotation * Math.PI) / 180);
+        if (node.flipX) ctx.scale(-1, 1);
         const ratio = imgEl.naturalWidth && imgEl.naturalHeight ? imgEl.naturalWidth / imgEl.naturalHeight : 1;
         const drawW = ratio >= 1 ? baseBox : baseBox * ratio;
         const drawH = ratio >= 1 ? baseBox / ratio : baseBox;
@@ -284,7 +394,6 @@ async function exportCollagePng() {
       }
     }
 
-    // Minimal Alta Editorial Footer
     ctx.strokeStyle = 'rgba(0,0,0,0.08)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -298,7 +407,11 @@ async function exportCollagePng() {
 
     ctx.fillStyle = '#666666';
     ctx.font = '400 22px Inter, "Noto Sans SC", sans-serif';
-    const piecesSummary = (props.plan.slots || []).map((s) => s.item.name).slice(0, 4).join(' · ');
+    const piecesSummary = nodes.value
+      .filter((n) => !n.labelText)
+      .map((n) => resolveNodeVisual(n).name)
+      .slice(0, 4)
+      .join(' · ');
     ctx.fillText(piecesSummary, 56, stageH + 134);
 
     ctx.fillStyle = '#000000';
@@ -331,17 +444,41 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
 
 <template>
   <div class="space-y-3">
-    <!-- Top Canvas Control Strip -->
-    <div class="flex flex-wrap items-center justify-between gap-2 text-[12px]">
-      <div class="flex items-center gap-1.5 text-[#666666]">
-        <AppIcon name="move" :size="14" class="text-black" />
-        <span>按住衣物自由拖拽 · 点击选中后可缩放、旋转或调整前后叠层</span>
+    <!-- Studio Launch Banner (Solves narrow embedded box pain point) -->
+    <div class="rounded-2xl bg-[#FAFAFA] border border-black/[0.08] px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2 text-[12px] text-[#555555]">
+        <span class="px-2 py-0.5 rounded bg-black text-white font-mono text-[10px] tracking-wider">STUDIO</span>
+        <span>打开全屏工作台可自由拖入全衣橱单品、配饰耳饰、切换画幅纸张与无级旋转</span>
       </div>
       <div class="flex items-center gap-1.5">
         <button
           type="button"
+          @click="openStudio"
+          class="px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition flex items-center gap-1.5 shadow-sm"
+        >
+          <AppIcon name="maximize" :size="13" />
+          进入全屏工作台
+        </button>
+        <button
+          type="button"
+          @click="openStandaloneWindow"
+          title="在浏览器新窗口独立打开大画板"
+          class="px-2.5 py-1.5 rounded-full bg-white hover:bg-[#EFEFEF] border border-black/15 text-black text-[11.5px] font-medium transition flex items-center gap-1"
+        >
+          <AppIcon name="external-link" :size="12" />
+          独立窗口
+        </button>
+      </div>
+    </div>
+
+    <!-- Compact Quick Actions -->
+    <div class="flex flex-wrap items-center justify-between gap-2 text-[12px]">
+      <span class="text-[#666666] text-[11.5px]">双击画布空白处也可快速展开全屏工作台</span>
+      <div class="flex items-center gap-1.5">
+        <button
+          type="button"
           @click="resetAutoLayout"
-          class="px-3 py-1.5 rounded-full bg-white hover:bg-[#EBEBEB] border border-black/10 text-black font-medium transition"
+          class="px-3 py-1 rounded-full bg-white hover:bg-[#EBEBEB] border border-black/10 text-black font-medium transition"
         >
           自动排版
         </button>
@@ -349,7 +486,7 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
           type="button"
           @click="handleSave"
           :disabled="saving"
-          class="px-3.5 py-1.5 rounded-full text-[12px] font-medium transition flex items-center gap-1"
+          class="px-3 py-1 rounded-full text-[12px] font-medium transition flex items-center gap-1"
           :class="
             hasUnsavedChanges
               ? 'bg-black text-white hover:bg-[#262626]'
@@ -363,7 +500,7 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
           type="button"
           @click="exportCollagePng"
           :disabled="exporting"
-          class="px-3 py-1.5 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 text-black font-medium transition flex items-center gap-1"
+          class="px-3 py-1 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 text-black font-medium transition flex items-center gap-1"
         >
           <AppIcon name="download" :size="13" />
           {{ exporting ? '导出中...' : '导出 PNG' }}
@@ -371,28 +508,39 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
       </div>
     </div>
 
-    <!-- Interactive Free-Form Flat-Lay Stage -->
+    <!-- Embedded Preview Stage -->
     <div
       ref="canvasRef"
       @click.self="selectedKey = null"
+      @dblclick.self="openStudio"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
-      class="relative w-full h-[460px] sm:h-[520px] rounded-3xl border border-black/[0.08] bg-white overflow-hidden select-none touch-none shadow-inner"
+      class="group relative w-full h-[460px] sm:h-[520px] rounded-3xl border border-black/[0.08] bg-white overflow-hidden select-none touch-none shadow-inner"
       style="
         background-image: radial-gradient(rgba(0, 0, 0, 0.09) 1px, transparent 0);
         background-size: 22px 22px;
       "
     >
-      <!-- Subtle Editorial Corner Watermark -->
       <div class="pointer-events-none absolute top-3.5 left-4 text-[10px] font-mono uppercase tracking-[0.18em] text-black/30">
         ALTA FLAT-LAY STUDIO · {{ nodes.length }} PIECES
       </div>
+
+      <!-- Top-Right Expand Trigger inside Canvas -->
+      <button
+        type="button"
+        @click.stop="openStudio"
+        class="absolute top-3 right-3 z-[40] px-3 py-1.5 rounded-full bg-white/90 hover:bg-black hover:text-white border border-black/15 text-[11.5px] font-medium text-black shadow-sm backdrop-blur transition flex items-center gap-1.5"
+      >
+        <AppIcon name="maximize" :size="12" />
+        放大全屏拼贴
+      </button>
+
       <div class="pointer-events-none absolute bottom-3.5 right-4 text-[10px] font-mono text-black/30">
         DRAG · SCALE · LAYER
       </div>
 
-      <!-- Draggable Garment Cutout Stickers -->
+      <!-- Draggable Garment & Stamp Nodes -->
       <div
         v-for="node in nodes"
         :key="node.nodeKey"
@@ -408,7 +556,14 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         }"
       >
         <div
-          v-if="slotMap[node.nodeKey]"
+          v-if="node.labelText"
+          class="px-3 py-1 rounded-lg font-mono text-[13px] font-semibold tracking-[0.16em] text-black whitespace-nowrap"
+          :class="selectedKey === node.nodeKey ? 'ring-2 ring-black bg-white/70' : ''"
+        >
+          {{ node.labelText }}
+        </div>
+        <div
+          v-else
           class="relative w-36 h-36 sm:w-44 sm:h-44 p-2 rounded-2xl flex items-center justify-center transition"
           :class="
             selectedKey === node.nodeKey
@@ -416,23 +571,27 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
               : 'hover:ring-1 hover:ring-black/25'
           "
         >
-          <GarmentVisual
-            :image-url="slotMap[node.nodeKey].item.processedImageUrl"
-            :svg-type="slotMap[node.nodeKey].item.svgType"
-            :color-hex="slotMap[node.nodeKey].item.colorHex"
-            :alt="slotMap[node.nodeKey].item.name"
-            class="w-full h-full pointer-events-none drop-shadow-[0_10px_16px_rgba(0,0,0,0.10)]"
-          />
+          <div
+            class="w-full h-full flex items-center justify-center pointer-events-none"
+            :style="{ transform: node.flipX ? 'scaleX(-1)' : 'none' }"
+          >
+            <GarmentVisual
+              :image-url="resolveNodeVisual(node).imageUrl"
+              :svg-type="resolveNodeVisual(node).svgType"
+              :color-hex="resolveNodeVisual(node).colorHex"
+              :alt="resolveNodeVisual(node).name"
+              class="w-full h-full drop-shadow-[0_10px_16px_rgba(0,0,0,0.10)]"
+            />
+          </div>
 
-          <!-- Selected Corner Indicator + Layer Pill -->
           <span
             v-if="selectedKey === node.nodeKey"
             class="absolute -top-3 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-black text-white text-[10px] font-medium whitespace-nowrap shadow-sm"
           >
-            {{ slotMap[node.nodeKey].item.name }} · 层 {{ node.zIndex }}
+            {{ resolveNodeVisual(node).name }} · 层 {{ node.zIndex }}
           </span>
           <span
-            v-else-if="slotMap[node.nodeKey].missing"
+            v-else-if="slotMap[node.nodeKey]?.missing"
             class="absolute -bottom-1 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-white/95 border border-dashed border-black/30 text-[9.5px] text-black whitespace-nowrap"
           >
             建议补全
@@ -441,13 +600,12 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
       </div>
     </div>
 
-    <!-- Non-overlapping Inspector Dock below canvas -->
+    <!-- Compact Inspector Dock below preview -->
     <div
-      v-if="selectedNode && selectedSlot"
+      v-if="selectedNode"
       class="rounded-2xl bg-black text-white px-4 py-2.5 shadow-card flex flex-wrap items-center justify-between gap-2.5 text-[11.5px]"
     >
       <div class="flex flex-wrap items-center gap-3">
-        <!-- Scale Controls -->
         <div class="flex items-center gap-1.5">
           <span class="text-white/60 text-[11px]">缩放</span>
           <button
@@ -467,7 +625,6 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
           </button>
         </div>
 
-        <!-- Rotation Controls -->
         <div class="flex items-center gap-1.5 pl-2.5 border-l border-white/15">
           <span class="text-white/60 text-[11px]">角度</span>
           <button
@@ -480,7 +637,6 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
           <button
             type="button"
             @click="setRotation(0)"
-            title="点击归零"
             class="px-2 h-6 rounded-full bg-white/10 hover:bg-white/25 font-mono text-[10.5px]"
           >
             {{ selectedNode.rotation }}°
@@ -494,36 +650,24 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
           </button>
         </div>
 
-        <!-- Z-Index Layer Controls (Tuck-in / Overlay) -->
         <div class="flex items-center gap-1 pl-2.5 border-l border-white/15">
           <button
             type="button"
+            @click="toggleFlip"
+            class="px-2.5 h-6 rounded-full bg-white/15 hover:bg-white text-white hover:text-black transition"
+          >
+            镜像
+          </button>
+          <button
+            type="button"
             @click="bringToFront"
-            title="置顶图层（如外套叠穿在外）"
             class="px-2.5 h-6 rounded-full bg-white/15 hover:bg-white text-white hover:text-black transition"
           >
             置顶
           </button>
           <button
             type="button"
-            @click="stepZ(1)"
-            title="上移一层"
-            class="w-6 h-6 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center"
-          >
-            <AppIcon name="arrow-up" :size="12" />
-          </button>
-          <button
-            type="button"
-            @click="stepZ(-1)"
-            title="下移一层"
-            class="w-6 h-6 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center"
-          >
-            <AppIcon name="arrow-down" :size="12" />
-          </button>
-          <button
-            type="button"
             @click="sendToBack"
-            title="置底图层（如上衣塞入裤腰）"
             class="px-2.5 h-6 rounded-full bg-white/15 hover:bg-white text-white hover:text-black transition"
           >
             置底
@@ -531,9 +675,8 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         </div>
       </div>
 
-      <!-- Swap Piece -->
       <button
-        v-if="!selectedSlot.anchor"
+        v-if="selectedSlot && !selectedSlot.anchor"
         type="button"
         @click="emit('swap-slot', selectedSlot.slotKey, selectedSlot.item.id)"
         class="px-3 h-7 rounded-full bg-white text-black hover:bg-white/90 font-medium flex items-center gap-1 shrink-0"
@@ -542,5 +685,17 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         换一件
       </button>
     </div>
+
+    <!-- Full-Viewport Standalone Flat-Lay Studio Modal -->
+    <FlatLayStudioModal
+      :open="studioOpen"
+      :plan="plan"
+      :initial-nodes="nodes"
+      :saving="saving"
+      @close="closeStudio"
+      @update-nodes="handleStudioUpdateNodes"
+      @save-layout="handleStudioSave"
+      @swap-slot="(slotKey, id) => emit('swap-slot', slotKey, id)"
+    />
   </div>
 </template>
