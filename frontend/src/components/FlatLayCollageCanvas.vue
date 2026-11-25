@@ -206,6 +206,49 @@ function resolveNodeVisual(node: CollageNode) {
 const selectedNode = computed(() => nodes.value.find((n) => n.nodeKey === selectedKey.value) || null);
 const selectedSlot = computed(() => (selectedKey.value ? slotMap.value[selectedKey.value] || null : null));
 
+/**
+ * Auto-fits unbounded infinite-canvas coordinates into the embedded preview box
+ * whenever items have been spread beyond [10..90] in the full-screen Studio.
+ */
+const previewViewport = computed(() => {
+  if (nodes.value.length === 0) return { minX: 0, spanX: 100, minY: 0, spanY: 100, scaleFactor: 1 };
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes.value) {
+    minX = Math.min(minX, n.x);
+    maxX = Math.max(maxX, n.x);
+    minY = Math.min(minY, n.y);
+    maxY = Math.max(maxY, n.y);
+  }
+  const outOfStandard = minX < 10 || maxX > 90 || minY < 10 || maxY > 90;
+  if (!outOfStandard) {
+    return { minX: 0, spanX: 100, minY: 0, spanY: 100, scaleFactor: 1 };
+  }
+  const padX = Math.max(18, (maxX - minX) * 0.22);
+  const padY = Math.max(18, (maxY - minY) * 0.22);
+  const span = Math.max(100, maxX - minX + padX * 2, maxY - minY + padY * 2);
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  return {
+    minX: cx - span / 2,
+    spanX: span,
+    minY: cy - span / 2,
+    spanY: span,
+    scaleFactor: Math.max(0.45, Math.min(1, 100 / span)),
+  };
+});
+
+function toPreviewPct(node: CollageNode) {
+  const vp = previewViewport.value;
+  return {
+    left: `${((node.x - vp.minX) / vp.spanX) * 100}%`,
+    top: `${((node.y - vp.minY) / vp.spanY) * 100}%`,
+    scale: node.scale * vp.scaleFactor,
+  };
+}
+
 function onPointerDown(e: PointerEvent, node: CollageNode) {
   const rect = canvasRef.value?.getBoundingClientRect();
   if (!rect) return;
@@ -227,10 +270,11 @@ function onPointerMove(e: PointerEvent) {
   if (!d) return;
   const node = nodes.value.find((n) => n.nodeKey === d.nodeKey);
   if (!node) return;
-  const dxPct = ((e.clientX - d.startClientX) / d.canvasW) * 100;
-  const dyPct = ((e.clientY - d.startClientY) / d.canvasH) * 100;
-  node.x = Number(Math.max(8, Math.min(92, d.origX + dxPct)).toFixed(1));
-  node.y = Number(Math.max(10, Math.min(90, d.origY + dyPct)).toFixed(1));
+  const vp = previewViewport.value;
+  const dxUnits = ((e.clientX - d.startClientX) / d.canvasW) * vp.spanX;
+  const dyUnits = ((e.clientY - d.startClientY) / d.canvasH) * vp.spanY;
+  node.x = Number((d.origX + dxUnits).toFixed(1));
+  node.y = Number((d.origY + dyUnits).toFixed(1));
   hasUnsavedChanges.value = true;
 }
 
@@ -520,10 +564,10 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         @click.stop="selectedKey = node.nodeKey"
         class="absolute cursor-grab active:cursor-grabbing transition-shadow"
         :style="{
-          left: `${node.x}%`,
-          top: `${node.y}%`,
+          left: toPreviewPct(node).left,
+          top: toPreviewPct(node).top,
           zIndex: node.zIndex,
-          transform: `translate(-50%, -50%) scale(${node.scale}) rotate(${node.rotation}deg)`,
+          transform: `translate(-50%, -50%) scale(${toPreviewPct(node).scale}) rotate(${node.rotation}deg)`,
         }"
       >
         <div
