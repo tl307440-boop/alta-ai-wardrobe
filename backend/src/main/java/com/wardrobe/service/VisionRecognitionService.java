@@ -123,6 +123,175 @@ public class VisionRecognitionService {
                 .build();
     }
 
+    private static final int MAX_DETECTED_ITEMS = 8;
+
+    /**
+     * Multi-garment detection for wardrobe ingestion. Returns one structured item per visible garment together with
+     * a normalized bounding box so the browser can crop + cut out each piece. Without an active model nothing is
+     * stored and an empty list is returned (the client then falls back to the single-item pipeline).
+     */
+    public VisionDto.ItemsDetectionVo detectItems(Long userId, MultipartFile file, String sourceType) {
+        AiConfigService.ResolvedAiCredentials creds = aiConfigService.resolveForUser(userId);
+        if (!creds.active()) {
+            storageService.validateImageOnly(file);
+            return VisionDto.ItemsDetectionVo.builder()
+                    .items(List.of())
+                    .usedRealLlm(false)
+                    .notice("未配置模型 API Key，无法自动识别多件单品")
+                    .build();
+        }
+
+        StorageService.StoredImage original = storageService.validateAndStoreImage(userId, file, "orig");
+        String dataUri = storageService.toDataUri(original.bytes(), original.mimeType());
+        JsonNode json = llmClient.detectClothingItems(creds, dataUri, sourceType);
+        if (!json.path("isClothing").asBoolean(true)) {
+            throw new BusinessException(ErrorCode.NOT_CLOTHING);
+        }
+
+        List<WardrobeItem> userWardrobe = wardrobeItemMapper.selectList(
+                new LambdaQueryWrapper<WardrobeItem>().eq(WardrobeItem::getUserId, userId));
+        List<VisionDto.DetectedItem> items = new ArrayList<>();
+        JsonNode arr = json.path("items");
+        if (arr.isArray()) {
+            for (JsonNode n : arr) {
+                if (items.size() >= MAX_DETECTED_ITEMS) break;
+                items.add(toDetectedItem(n, userWardrobe));
+            }
+        }
+        if (items.isEmpty()) {
+            throw new BusinessException(ErrorCode.NOT_CLOTHING);
+        }
+
+        return VisionDto.ItemsDetectionVo.builder()
+                .originalImageUrl(original.url())
+                .items(items)
+                .usedRealLlm(true)
+                .notice("已通过服务端配置的多模态模型 (" + creds.visionModel() + ") 识别出 " + items.size() + " 件单品")
+                .build();
+    }
+
+    private VisionDto.DetectedItem toDetectedItem(JsonNode n, List<WardrobeItem> userWardrobe) {
+        String category = wardrobeService.normalizeCategory(n.path("category").asText("top"));
+        String name = n.path("name").asText("识别单品");
+        String color = n.path("color").asText("米白");
+        String colorHex = n.path("colorHex").asText(resolveColorHex(color));
+        List<String> tags = new ArrayList<>();
+        if (n.path("styleTags").isArray()) {
+            n.path("styleTags").forEach(t -> {
+                String v = t.asText("").trim();
+                if (!v.isEmpty() && !tags.contains(v)) tags.add(v);
+            });
+        }
+        if (tags.isEmpty()) tags.add("极简通勤");
+        String seasonRaw = n.path("season").isArray()
+                ? String.join(",", jsonUtils.toStringList(n.path("season").toString()))
+                : n.path("season").asText("spring,autumn");
+        String svgType = wardrobeService.inferSvgType(category, name);
+
+        MatchResult dup = findBestWardrobeMatch(userWardrobe,
+                new RawDetectedPiece(categoryToLabel(category), name, category, color, colorHex, svgType,
+                        tags, name + " " + color, 50, 50));
+
+        return VisionDto.DetectedItem.builder()
+                .name(name)
+                .category(category)
+                .subCategory(n.path("subCategory").asText(name))
+                .color(color)
+                .colorHex(colorHex)
+                .seasons(wardrobeService.decodeSeasonsToCn(seasonRaw))
+                .thickness(n.path("thickness").asInt(2))
+                .styleTags(tags)
+                .material(n.path("material").asText("精选混纺"))
+                .svgType(svgType)
+                .bbox(normalizeBoundingBox(n.path("bbox")))
+                .similarWardrobeName(dup != null ? dup.item.getName() : null)
+                .similarity(dup != null ? dup.similarity : 0)
+                .aiRawResult(n.toString())
+                .build();
+    }
+
+    /**
+     * Normalizes whatever box format a vision model returns into fractions of the image ([0,1], top-left origin):
+     * [x, y, w, h] or {x,y,w,h}; 0..1 fractions, 0..100 percentages or 0..1000 grids; and corner boxes
+     * [x1, y1, x2, y2] (detected when x+w would overflow the image). Returns null when the box is unusable.
+     */
+    static VisionDto.BoundingBox normalizeBoundingBox(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        double a;
+        double b;
+        double c;
+        double d;
+        if (node.isArray() && node.size() == 4) {
+            a = node.get(0).asDouble(Double.NaN);
+            b = node.get(1).asDouble(Double.NaN);
+            c = node.get(2).asDouble(Double.NaN);
+            d = node.get(3).asDouble(Double.NaN);
+        } else if (node.isObject()) {
+            a = node.path("x").asDouble(Double.NaN);
+            b = node.path("y").asDouble(Double.NaN);
+            c = node.has("w") ? node.path("w").asDouble(Double.NaN) : node.path("width").asDouble(Double.NaN);
+            d = node.has("h") ? node.path("h").asDouble(Double.NaN) : node.path("height").asDouble(Double.NaN);
+        } else {
+            return null;
+        }
+        if (Double.isNaN(a) || Double.isNaN(b) || Double.isNaN(c) || Double.isNaN(d)) return null;
+        if (a < 0 || b < 0 || c <= 0 || d <= 0) return null;
+
+        double max = Math.max(Math.max(a, b), Math.max(c, d));
+        double scale;
+        if (max <= 1.0) scale = 1.0;
+        else if (max <= 100.0) scale = 100.0;
+        else if (max <= 1000.0) scale = 1000.0;
+        else return null;
+        double x = a / scale;
+        double y = b / scale;
+        double w = c / scale;
+        double h = d / scale;
+
+        // Corner format [x1, y1, x2, y2]: the "width" would push the box outside the image.
+        if ((x + w > 1.02 || y + h > 1.02) && w > x && h > y) {
+            w = w - x;
+            h = h - y;
+        }
+
+        x = Math.min(x, 1.0);
+        y = Math.min(y, 1.0);
+        w = Math.min(w, 1.0 - x);
+        h = Math.min(h, 1.0 - y);
+        if (w < 0.04 || h < 0.04) return null;
+        return VisionDto.BoundingBox.builder()
+                .x(round4(x)).y(round4(y)).w(round4(w)).h(round4(h))
+                .build();
+    }
+
+    private static double round4(double v) {
+        return Math.round(v * 10000.0) / 10000.0;
+    }
+
+    /**
+     * Stores one client-side crop (and its optional browser cutout) of a detected garment into the caller's
+     * per-user upload folder after magic-byte validation.
+     */
+    public VisionDto.StoredItemImageVo storeItemImage(Long userId, MultipartFile file, MultipartFile cutoutFile) {
+        StorageService.StoredImage original = storageService.validateAndStoreImage(userId, file, "crop");
+        String processedUrl = original.url();
+        boolean cutoutFallback = true;
+        if (cutoutFile != null && !cutoutFile.isEmpty()) {
+            try {
+                StorageService.StoredImage cutout = storageService.validateAndStoreImage(userId, cutoutFile, "cutout");
+                processedUrl = cutout.url();
+                cutoutFallback = false;
+            } catch (Exception e) {
+                log.warn("Client cutout file ignored, falling back to crop image: {}", e.getMessage());
+            }
+        }
+        return VisionDto.StoredItemImageVo.builder()
+                .originalImageUrl(original.url())
+                .processedImageUrl(processedUrl)
+                .cutoutFallback(cutoutFallback)
+                .build();
+    }
+
     public VisionDto.InspirationAnalyzeVo analyzeInspiration(Long userId, MultipartFile file, String presetId,
                                                              String userQuery, BigDecimal budgetLimit) {
         BigDecimal budget = budgetLimit != null ? budgetLimit : new BigDecimal("300");

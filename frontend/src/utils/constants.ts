@@ -97,6 +97,46 @@ export const SCAN_SAMPLES = [
   },
 ];
 
+/** 一图多件内置演示：模拟「整套穿搭照」被自动拆分为上衣 / 下装 / 鞋履 */
+export const SCAN_OUTFIT_SAMPLE = {
+  id: 'smp-outfit',
+  shortLabel: '整套穿搭（多件）',
+  sourceLabel: '一图自动拆分',
+  sourceType: 'photo',
+  pieces: [
+    {
+      svgType: 'striped_shirt',
+      name: '法式复古条纹海魂衫长袖',
+      category: 'top',
+      color: '牛仔蓝',
+      colorHex: '#3B5372',
+      seasons: ['春', '秋'],
+      styleTags: ['法式松弛', 'Clean Fit'],
+      price: 169,
+    },
+    {
+      svgType: 'trousers',
+      name: '雾霾蓝高腰垂感阔腿裤',
+      category: 'bottom',
+      color: '雾霾蓝',
+      colorHex: '#6F869C',
+      seasons: ['春', '夏', '秋'],
+      styleTags: ['极简通勤', '温柔韩系'],
+      price: 259,
+    },
+    {
+      svgType: 'loafers',
+      name: '复古焦糖棕乐福鞋',
+      category: 'shoes',
+      color: '焦糖棕',
+      colorHex: '#8A5230',
+      seasons: ['春', '秋', '冬'],
+      styleTags: ['极简通勤', '美拉德复古'],
+      price: 399,
+    },
+  ],
+};
+
 export const INSPIRATION_PRESETS = [
   {
     id: 'insp-1',

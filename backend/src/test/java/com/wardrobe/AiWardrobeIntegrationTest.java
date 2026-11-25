@@ -3,10 +3,12 @@ package com.wardrobe;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wardrobe.service.AiConfigService;
+import com.wardrobe.service.client.MultimodalLlmClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
@@ -18,6 +20,9 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -34,6 +39,9 @@ class AiWardrobeIntegrationTest {
 
     @Autowired
     private AiConfigService aiConfigService;
+
+    @MockBean
+    private MultimodalLlmClient llmClient;
 
     private String loginAsDemo() throws Exception {
         MvcResult res = mockMvc.perform(post("/api/auth/login")
@@ -550,5 +558,127 @@ class AiWardrobeIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.looks[0].matchScore").isNumber())
                 .andExpect(jsonPath("$.data.looks[0].matchReason").isNotEmpty());
+    }
+
+    private static final byte[] VALID_PNG_BYTES = new byte[]{
+            (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52};
+
+    @Test
+    void testMultiItemDetectionReturnsBoundingBoxesAndStoresCrops() throws Exception {
+        String username = "multi_detect_" + System.currentTimeMillis();
+        MvcResult regRes = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", username,
+                                "password", "TestPass123!",
+                                "nickname", "MultiDetect",
+                                "loadStarterPack", false
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = objectMapper.readTree(regRes.getResponse().getContentAsString()).path("data").path("token").asText();
+        MockMultipartFile png = new MockMultipartFile("file", "outfit.png", "image/png", VALID_PNG_BYTES);
+        MockMultipartFile fake = new MockMultipartFile("file", "fake.png", "image/png", "not-an-image".getBytes());
+
+        // 1. JWT is mandatory
+        mockMvc.perform(multipart("/api/vision/detect-items").file(png))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(40101));
+
+        // 2. No model configured: empty list, nothing stored on disk, no error
+        mockMvc.perform(multipart("/api/vision/detect-items").file(png)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.usedRealLlm").value(false))
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.originalImageUrl").doesNotExist());
+
+        // 3. Magic-byte validation happens before anything else
+        mockMvc.perform(multipart("/api/vision/detect-items").file(fake)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40002));
+
+        // 4. Seed a wardrobe piece that the detector should flag as a duplicate
+        mockMvc.perform(post("/api/wardrobe/items")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "name", "直筒牛仔裤",
+                                "category", "bottom",
+                                "color", "牛仔蓝",
+                                "seasons", List.of("春", "秋")
+                        ))))
+                .andExpect(status().isOk());
+
+        // 5. Enable a (fake) key and stub the model response: fractions, percentages and an unusable box
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "test",
+                                "baseUrl", "http://127.0.0.1:9/v1",
+                                "apiKey", "sk-test-multi-detect-1234567890",
+                                "visionModel", "gpt-4o-mini",
+                                "chatModel", "gpt-4o-mini",
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk());
+
+        when(llmClient.detectClothingItems(any(), anyString(), anyString())).thenReturn(objectMapper.readTree("""
+                {"isClothing": true, "items": [
+                  {"name":"条纹针织衫","category":"top","color":"藏蓝","season":"spring,autumn","styleTags":["法式松弛"],"bbox":[0.2,0.1,0.6,0.35]},
+                  {"name":"直筒牛仔裤","category":"bottom","color":"牛仔蓝","season":"spring,autumn","bbox":[30,50,40,45]},
+                  {"name":"德训鞋","category":"shoes","color":"米白","bbox":"unknown"}
+                ]}
+                """));
+
+        MvcResult detectRes = mockMvc.perform(multipart("/api/vision/detect-items").file(png)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.usedRealLlm").value(true))
+                .andExpect(jsonPath("$.data.originalImageUrl").value(org.hamcrest.Matchers.startsWith("/uploads/")))
+                .andExpect(jsonPath("$.data.items.length()").value(3))
+                .andExpect(jsonPath("$.data.items[0].bbox.x").value(0.2))
+                .andExpect(jsonPath("$.data.items[0].bbox.h").value(0.35))
+                .andExpect(jsonPath("$.data.items[1].bbox.x").value(0.3))
+                .andExpect(jsonPath("$.data.items[1].bbox.w").value(0.4))
+                .andExpect(jsonPath("$.data.items[2].bbox").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].similarWardrobeName").doesNotExist())
+                .andExpect(jsonPath("$.data.items[1].similarWardrobeName").value("直筒牛仔裤"))
+                .andReturn();
+        JsonNode detectData = objectMapper.readTree(detectRes.getResponse().getContentAsString()).path("data");
+        assertThat(detectData.path("items").get(0).path("category").asText()).isEqualTo("top");
+        assertThat(detectData.path("items").get(0).path("seasons").isArray()).isTrue();
+
+        // 6. Non-clothing photo -> 42201
+        when(llmClient.detectClothingItems(any(), anyString(), anyString())).thenReturn(
+                objectMapper.readTree("{\"isClothing\": false, \"items\": []}"));
+        mockMvc.perform(multipart("/api/vision/detect-items").file(png)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value(42201));
+
+        // 7. store-item-image: crop + cutout land in the caller's own upload folder
+        MockMultipartFile cutout = new MockMultipartFile("cutoutFile", "cutout.png", "image/png", VALID_PNG_BYTES);
+        mockMvc.perform(multipart("/api/vision/store-item-image").file(png).file(cutout)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.cutoutFallback").value(false))
+                .andExpect(jsonPath("$.data.originalImageUrl").value(org.hamcrest.Matchers.containsString("/user_")))
+                .andExpect(jsonPath("$.data.processedImageUrl").value(org.hamcrest.Matchers.containsString("cutout")));
+
+        // a broken cutout degrades to the crop; a broken crop is rejected with 40002
+        MockMultipartFile badCutout = new MockMultipartFile("cutoutFile", "cutout.png", "image/png", "nope".getBytes());
+        mockMvc.perform(multipart("/api/vision/store-item-image").file(png).file(badCutout)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.cutoutFallback").value(true));
+        mockMvc.perform(multipart("/api/vision/store-item-image").file(fake)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40002));
+        mockMvc.perform(multipart("/api/vision/store-item-image").file(png))
+                .andExpect(status().isUnauthorized());
     }
 }

@@ -30,7 +30,9 @@ public class StorageService {
 
     public record StoredImage(String url, String mimeType, byte[] bytes) {}
 
-    public StoredImage validateAndStoreImage(Long userId, MultipartFile file, String prefix) {
+    private record ValidatedImage(byte[] bytes, String ext, String mimeType) {}
+
+    private ValidatedImage validate(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ErrorCode.IMAGE_INVALID, "上传图片不能为空");
         }
@@ -53,6 +55,22 @@ public class StorageService {
             case "webp" -> "image/webp";
             default -> "image/jpeg";
         };
+        return new ValidatedImage(bytes, detectedExt, mimeType);
+    }
+
+    /**
+     * Magic-byte + size validation only (nothing is written to disk). The returned {@code url} is null.
+     */
+    public StoredImage validateImageOnly(MultipartFile file) {
+        ValidatedImage v = validate(file);
+        return new StoredImage(null, v.mimeType(), v.bytes());
+    }
+
+    public StoredImage validateAndStoreImage(Long userId, MultipartFile file, String prefix) {
+        ValidatedImage validated = validate(file);
+        byte[] bytes = validated.bytes();
+        String detectedExt = validated.ext();
+        String mimeType = validated.mimeType();
         try {
             Path userDir = rootDir.resolve("user_" + userId);
             Files.createDirectories(userDir);

@@ -10,6 +10,8 @@ import type {
   InspoLikeToggle,
   ItemDetailResponse,
   ItemRecognitionResult,
+  ItemsDetectionResult,
+  StoredItemImage,
   OutfitPlanVo,
   PreferenceAnalytics,
   ProductItem,
@@ -101,6 +103,18 @@ export const visionApi = {
   recognizeItem: (formData: FormData) =>
     unwrap<ItemRecognitionResult>(
       http.post('/vision/recognize-item', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    ),
+  detectItems: (formData: FormData) =>
+    unwrap<ItemsDetectionResult>(
+      http.post('/vision/detect-items', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    ),
+  storeItemImage: (formData: FormData) =>
+    unwrap<StoredItemImage>(
+      http.post('/vision/store-item-image', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
     ),

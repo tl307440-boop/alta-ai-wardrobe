@@ -7,15 +7,19 @@ import { useWardrobeStore } from '@/stores/wardrobe';
 import { useToastStore } from '@/stores/toast';
 import { tryBrowserCutout } from '@/utils/cutout';
 import {
+  ALL_STYLE_OPTIONS,
   CATEGORY_OPTIONS,
   COLOR_SWATCHES,
   INSPIRATION_PRESETS,
+  SCAN_OUTFIT_SAMPLE,
   SCAN_SAMPLES,
   SCAN_STEPS,
   SEASON_OPTIONS,
+  categoryLabel,
   platformBadgeClass,
 } from '@/utils/constants';
-import type { InspirationItemMatch } from '@/types';
+import { cropImageRegion } from '@/utils/crop';
+import type { DetectedItem, InspirationItemMatch } from '@/types';
 import AppIcon from '@/components/AppIcon.vue';
 import GarmentSvg from '@/components/GarmentSvg.vue';
 import GarmentVisual from '@/components/GarmentVisual.vue';
@@ -37,40 +41,194 @@ watch(
   }
 );
 
-// ==================== Mode A: Single Item Scan & Browser AI Cutout ====================
+// ==================== 模式 A：AI 识别录入（一图多件，勾选后批量入库） ====================
+interface SamplePiece {
+  svgType: string;
+  name: string;
+  category: string;
+  color: string;
+  colorHex: string;
+  seasons: string[];
+  styleTags: string[];
+  price?: number;
+}
+interface ScanSample {
+  id: string;
+  shortLabel: string;
+  sourceLabel: string;
+  sourceType: string;
+  pieces: SamplePiece[];
+}
+
+interface ScanPiece {
+  uid: string;
+  selected: boolean;
+  saved: boolean;
+  expanded: boolean;
+  moreOpen: boolean;
+  corrected: boolean;
+  newTag: string;
+  name: string;
+  category: string;
+  color: string;
+  colorHex: string;
+  seasons: string[];
+  styleTags: string[];
+  material: string;
+  price: string | number;
+  svgType: string;
+  originalImageUrl: string;
+  processedImageUrl: string;
+  aiRawResult: string;
+  duplicateOf: string | null;
+  /** 多件识别：该单品从整图中裁出的实物图（入库时上传），null 表示无位置框 */
+  cropFile: File | null;
+  /** 浏览器端抠图结果（可能失败，失败则用裁剪图入库） */
+  cutoutFile: File | null;
+  cutoutStatus: 'none' | 'pending' | 'running' | 'done' | 'failed';
+}
+
+const SAMPLES: ScanSample[] = [
+  SCAN_OUTFIT_SAMPLE,
+  ...SCAN_SAMPLES.map((s) => ({
+    id: s.id,
+    shortLabel: s.shortLabel,
+    sourceLabel: s.sourceLabel,
+    sourceType: s.sourceType,
+    pieces: [
+      {
+        svgType: s.svgType,
+        name: s.name,
+        category: s.category,
+        color: s.color,
+        colorHex: s.colorHex,
+        seasons: s.seasons,
+        styleTags: s.styleTags,
+        price: s.category === 'outerwear' ? 329 : s.category === 'bottom' ? 259 : 169,
+      },
+    ],
+  })),
+];
+
+const DEFAULT_SVG_BY_CATEGORY: Record<string, string> = {
+  outerwear: 'trench',
+  top: 'tshirt',
+  bottom: 'trousers',
+  shoes: 'sneakers',
+  accessory: 'tote_bag',
+};
+
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
 const savingItem = ref(false);
 
 const itemScan = reactive({
-  selectedSample: SCAN_SAMPLES[0] as (typeof SCAN_SAMPLES)[number] | null,
+  sample: null as ScanSample | null,
   uploadedOriginalDataUrl: null as string | null,
   uploadedCutoutDataUrl: null as string | null,
-  originalImageUrl: '' as string,
-  processedImageUrl: '' as string,
-  cutoutFallback: false,
   isScanning: false,
   currentStep: -1,
   done: false,
-  viewMode: 'cutout' as 'original' | 'cutout',
-  isCorrected: false,
-  confidence: 96.4,
+  viewMode: 'original' as 'original' | 'cutout',
   usedRealLlm: false,
   notice: '',
-  aiRawResult: '',
-  newTag: '',
-  form: {
-    name: '',
-    category: 'outerwear',
-    color: '焦糖棕',
-    colorHex: '#8A5230',
-    seasons: ['秋'] as string[],
-    styleTags: [] as string[],
-    material: '',
-    price: '' as string | number,
-    svgType: 'suede_jacket',
-  },
+  pieces: [] as ScanPiece[],
 });
+
+let pieceSeq = 0;
+
+function makePiece(partial: Partial<ScanPiece> & Pick<ScanPiece, 'name' | 'category' | 'svgType'>): ScanPiece {
+  pieceSeq += 1;
+  return {
+    uid: `piece-${Date.now()}-${pieceSeq}`,
+    selected: !partial.duplicateOf,
+    saved: false,
+    expanded: false,
+    moreOpen: false,
+    corrected: false,
+    newTag: '',
+    color: '燕麦',
+    colorHex: '#DFD3C3',
+    seasons: ['春', '秋'],
+    styleTags: ['日常百搭'],
+    material: '',
+    price: '',
+    originalImageUrl: '',
+    processedImageUrl: `svg://${partial.svgType}`,
+    aiRawResult: '',
+    duplicateOf: null,
+    cropFile: null,
+    cutoutFile: null,
+    cutoutStatus: 'none',
+    ...partial,
+  };
+}
+
+// 每次重新识别都会递增，用于让上一轮仍在后台运行的抠图任务自行作废
+let scanRunId = 0;
+const cutoutWaiters = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+
+function registerCutoutWaiter(uid: string) {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  cutoutWaiters.set(uid, { promise, resolve });
+}
+
+function settleCutout(uid: string) {
+  cutoutWaiters.get(uid)?.resolve();
+}
+
+/** 依次对每件裁剪图做浏览器端抠图：完成一件刷新一件，不阻塞清单展示与编辑 */
+async function runPieceCutouts(runId: number) {
+  const targets = itemScan.pieces.filter((p) => p.cropFile);
+  let first = true;
+  for (const p of targets) {
+    if (runId !== scanRunId) break;
+    p.cutoutStatus = 'running';
+    // 首次需加载抠图模型，给更长超时；之后模型已缓存
+    const res = await tryBrowserCutout(p.cropFile as File, first ? 45000 : 20000);
+    first = false;
+    if (runId !== scanRunId) break;
+    if (res.cutoutFile && res.cutoutDataUrl) {
+      p.cutoutFile = res.cutoutFile;
+      if (!p.saved) p.processedImageUrl = res.cutoutDataUrl;
+      p.cutoutStatus = 'done';
+    } else {
+      p.cutoutStatus = 'failed';
+    }
+    settleCutout(p.uid);
+  }
+  // 作废的轮次或未处理到的单品也要放行，避免入库时无限等待
+  targets.forEach((p) => settleCutout(p.uid));
+}
+
+async function waitForPieceCutout(p: ScanPiece) {
+  if (p.cutoutStatus !== 'pending' && p.cutoutStatus !== 'running') return;
+  await cutoutWaiters.get(p.uid)?.promise;
+}
+
+const hasSource = computed(() => !!(itemScan.sample || itemScan.uploadedOriginalDataUrl));
+const selectablePieces = computed(() => itemScan.pieces.filter((p) => !p.saved));
+const selectedCount = computed(() => selectablePieces.value.filter((p) => p.selected).length);
+const allSelected = computed(
+  () => selectablePieces.value.length > 0 && selectedCount.value === selectablePieces.value.length
+);
+const allSaved = computed(() => itemScan.pieces.length > 0 && itemScan.pieces.every((p) => p.saved));
+
+function resetScanResult() {
+  scanRunId += 1;
+  cutoutWaiters.forEach((w) => w.resolve());
+  cutoutWaiters.clear();
+  itemScan.done = false;
+  itemScan.currentStep = -1;
+  itemScan.pieces = [];
+  itemScan.notice = '';
+  itemScan.usedRealLlm = false;
+  itemScan.uploadedCutoutDataUrl = null;
+  itemScan.viewMode = 'original';
+}
 
 function triggerFileUpload() {
   fileInputRef.value?.click();
@@ -89,112 +247,178 @@ function handleFileUpload(e: Event) {
     return;
   }
   selectedFile.value = file;
-  itemScan.selectedSample = null;
-  itemScan.done = false;
-  itemScan.currentStep = -1;
-  itemScan.uploadedCutoutDataUrl = null;
-  itemScan.isCorrected = false;
-  itemScan.notice = '';
+  itemScan.sample = null;
+  resetScanResult();
   const reader = new FileReader();
   reader.onload = (ev) => {
     itemScan.uploadedOriginalDataUrl = String(ev.target?.result || '');
-    toast.show('已加载本地图片，点击「开始 AI 智能识别」执行抠图与多模态解析');
+    // 上传即自动识别，不再需要额外点一次「开始」
+    void startItemScan();
   };
   reader.readAsDataURL(file);
   input.value = '';
 }
 
-function selectScanSample(sample: (typeof SCAN_SAMPLES)[number]) {
+function selectScanSample(sample: ScanSample) {
+  if (itemScan.isScanning) return;
   selectedFile.value = null;
-  itemScan.selectedSample = sample;
+  itemScan.sample = sample;
   itemScan.uploadedOriginalDataUrl = null;
-  itemScan.uploadedCutoutDataUrl = null;
-  itemScan.done = false;
-  itemScan.currentStep = -1;
-  itemScan.isCorrected = false;
-  itemScan.notice = '';
-  itemScan.form.colorHex = sample.colorHex;
+  resetScanResult();
+  void startItemScan();
+}
+
+function inferSeasons(category: string, name: string): string[] {
+  if (/羽绒|棉服|大衣|毛衣|加绒|靴/.test(name)) return ['秋', '冬'];
+  if (/短袖|t恤|背心|短裤|半裙|凉鞋|吊带/i.test(name)) return ['春', '夏'];
+  if (category === 'accessory') return [...SEASON_OPTIONS];
+  return ['春', '秋'];
+}
+
+function pieceFromDetected(d: DetectedItem, sourceUrl: string): ScanPiece {
+  const category = d.category || 'top';
+  const svgType = d.svgType || DEFAULT_SVG_BY_CATEGORY[category] || 'tshirt';
+  return makePiece({
+    name: d.name || '识别单品',
+    category,
+    color: d.color || '燕麦',
+    colorHex: d.colorHex || '#DFD3C3',
+    seasons: d.seasons?.length ? [...d.seasons] : inferSeasons(category, d.name || ''),
+    styleTags: d.styleTags?.length ? [...d.styleTags] : ['日常百搭'],
+    material: d.material || '',
+    svgType,
+    originalImageUrl: sourceUrl,
+    processedImageUrl: `svg://${svgType}`,
+    aiRawResult: d.aiRawResult || '',
+    duplicateOf: d.similarWardrobeName ?? null,
+  });
+}
+
+/** 按位置框把每件单品从整图裁出来；没有可用位置框的单品保留插画占位 */
+async function attachCrops(file: File, detected: DetectedItem[], pieces: ScanPiece[]) {
+  await Promise.all(
+    detected.map(async (d, i) => {
+      if (!d.bbox) return;
+      try {
+        const crop = await cropImageRegion(file, d.bbox, { name: `piece-${i + 1}` });
+        pieces[i].cropFile = crop.file;
+        pieces[i].processedImageUrl = crop.dataUrl;
+        pieces[i].cutoutStatus = 'pending';
+      } catch {
+        // 裁剪失败：该件保留插画占位，不影响其他单品
+      }
+    })
+  );
+}
+
+async function scanUploadedPhoto(file: File) {
+  await sleep(200);
+
+  // 1) 优先尝试一图多件：服务端多件识别返回每件属性 + 位置框，前端逐件裁剪并抠出实物图；识别出 ≥2 件才进入多件清单
+  const cfg = wardrobeStore.aiConfig;
+  const llmReady = cfg.enabled && (cfg.hasApiKey || cfg.serverDefaultAvailable);
+  if (llmReady) {
+    itemScan.currentStep = 2;
+    const runId = scanRunId;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('sourceType', 'photo');
+      const res = await visionApi.detectItems(fd);
+      const detected = res.usedRealLlm ? res.items || [] : [];
+      if (runId !== scanRunId) return;
+      if (detected.length >= 2) {
+        itemScan.currentStep = 3;
+        const pieces = detected.map((d) => pieceFromDetected(d, res.originalImageUrl || ''));
+        await attachCrops(file, detected, pieces);
+        if (runId !== scanRunId) return;
+        pieces.forEach((p) => {
+          if (p.cutoutStatus === 'pending') registerCutoutWaiter(p.uid);
+        });
+        itemScan.usedRealLlm = true;
+        itemScan.notice = `已自动识别出 ${detected.length} 件单品`;
+        itemScan.pieces = pieces;
+        itemScan.currentStep = 4;
+        itemScan.done = true;
+        void runPieceCutouts(runId);
+        return;
+      }
+    } catch {
+      // 拆分失败时回落到单件识别，不打断录入
+    }
+  }
+
+  // 2) 单件识别：浏览器端智能抠图 + 服务端多模态属性解析
+  itemScan.currentStep = 1;
+  const cutoutRes = await tryBrowserCutout(file, 16000);
+  itemScan.uploadedCutoutDataUrl = cutoutRes.cutoutDataUrl;
+
+  itemScan.currentStep = 2;
+  const fd = new FormData();
+  fd.append('file', file);
+  if (cutoutRes.cutoutFile) fd.append('cutoutFile', cutoutRes.cutoutFile);
+  fd.append('sourceType', 'photo');
+  const result = await visionApi.recognizeItem(fd);
+  itemScan.currentStep = 3;
+  await sleep(200);
+
+  itemScan.usedRealLlm = result.usedRealLlm;
+  itemScan.notice = result.usedRealLlm ? result.notice || '' : '未配置模型，仅做基础解析（1 件）';
+  itemScan.pieces = [
+    makePiece({
+      name: result.name,
+      category: result.category,
+      color: result.color,
+      colorHex: result.colorHex || '#EFECE6',
+      seasons: result.seasons?.length ? [...result.seasons] : ['春', '秋'],
+      styleTags: result.styleTags?.length ? [...result.styleTags] : ['极简通勤'],
+      material: result.material || '',
+      svgType: result.svgType || 'tshirt',
+      originalImageUrl: result.originalImageUrl,
+      processedImageUrl: result.processedImageUrl,
+      aiRawResult: result.aiRawResult || '',
+    }),
+  ];
+  itemScan.currentStep = 4;
+  itemScan.done = true;
+  itemScan.viewMode = result.cutoutFallback || !cutoutRes.cutoutDataUrl ? 'original' : 'cutout';
+}
+
+async function scanSample(sample: ScanSample) {
+  for (let step = 0; step < 4; step++) {
+    itemScan.currentStep = step;
+    await sleep(260);
+  }
+  itemScan.usedRealLlm = false;
+  itemScan.notice = sample.pieces.length > 1 ? `内置演示 · 已拆分出 ${sample.pieces.length} 件` : '内置演示';
+  itemScan.pieces = sample.pieces.map((p) =>
+    makePiece({
+      name: p.name,
+      category: p.category,
+      color: p.color,
+      colorHex: p.colorHex,
+      seasons: [...p.seasons],
+      styleTags: [...p.styleTags],
+      material: '精选混纺',
+      price: p.price ?? '',
+      svgType: p.svgType,
+      processedImageUrl: `svg://${p.svgType}`,
+    })
+  );
+  itemScan.currentStep = 4;
+  itemScan.done = true;
 }
 
 async function startItemScan() {
-  if (itemScan.isScanning) return;
+  if (itemScan.isScanning || !hasSource.value) return;
   itemScan.isScanning = true;
   itemScan.done = false;
-  itemScan.isCorrected = false;
+  itemScan.pieces = [];
   itemScan.currentStep = 0;
 
   try {
-    if (selectedFile.value) {
-      // Real uploaded image pipeline: 1 Validate -> 2 Browser Cutout -> 3 Upload & VLM -> 4 Struct -> 5 Review
-      await sleep(220);
-      itemScan.currentStep = 1;
-      const cutoutRes = await tryBrowserCutout(selectedFile.value, 16000);
-      itemScan.uploadedCutoutDataUrl = cutoutRes.cutoutDataUrl;
-      itemScan.cutoutFallback = cutoutRes.fallback;
-
-      itemScan.currentStep = 2;
-      const fd = new FormData();
-      fd.append('file', selectedFile.value);
-      if (cutoutRes.cutoutFile) {
-        fd.append('cutoutFile', cutoutRes.cutoutFile);
-      }
-      fd.append('sourceType', 'photo');
-
-      const result = await visionApi.recognizeItem(fd);
-      itemScan.currentStep = 3;
-      await sleep(220);
-
-      itemScan.originalImageUrl = result.originalImageUrl;
-      itemScan.processedImageUrl = result.processedImageUrl;
-      itemScan.cutoutFallback = result.cutoutFallback;
-      itemScan.confidence = result.confidence || 96.0;
-      itemScan.usedRealLlm = result.usedRealLlm;
-      itemScan.notice = result.notice || '';
-      itemScan.aiRawResult = result.aiRawResult || '';
-      itemScan.form = {
-        name: result.name,
-        category: result.category,
-        color: result.color,
-        colorHex: result.colorHex || '#EFECE6',
-        seasons: result.seasons?.length ? [...result.seasons] : ['春', '秋'],
-        styleTags: result.styleTags?.length ? [...result.styleTags] : ['极简通勤'],
-        material: result.material || '',
-        price: '',
-        svgType: result.svgType || 'tshirt',
-      };
-      itemScan.currentStep = 4;
-      itemScan.done = true;
-      itemScan.viewMode = result.cutoutFallback ? 'original' : 'cutout';
-      toast.show(result.usedRealLlm ? '多模态大模型解析完成，请复核属性' : '图像上传与基础解析完成，请复核或人工微调');
-    } else if (itemScan.selectedSample) {
-      // Demo sample 5-step guided preview
-      for (let step = 0; step < 4; step++) {
-        itemScan.currentStep = step;
-        await sleep(320);
-      }
-      const src = itemScan.selectedSample;
-      itemScan.originalImageUrl = '';
-      itemScan.processedImageUrl = `svg://${src.svgType}`;
-      itemScan.cutoutFallback = false;
-      itemScan.confidence = 96.4;
-      itemScan.usedRealLlm = false;
-      itemScan.notice = '当前为内置测试样本演示；上传真实照片并配置 API Key 可启用多模态视觉实时解析';
-      itemScan.form = {
-        name: src.name,
-        category: src.category,
-        color: src.color,
-        colorHex: src.colorHex,
-        seasons: [...src.seasons],
-        styleTags: [...src.styleTags],
-        material: '精选混纺',
-        price: src.category === 'outerwear' ? 329 : src.category === 'bottom' ? 259 : 169,
-        svgType: src.svgType,
-      };
-      itemScan.currentStep = 4;
-      itemScan.done = true;
-      itemScan.viewMode = 'cutout';
-      toast.show('5 步多模态解析与智能抠图完成，请复核或人工微调属性');
-    }
+    if (selectedFile.value) await scanUploadedPhoto(selectedFile.value);
+    else if (itemScan.sample) await scanSample(itemScan.sample);
   } catch (e: any) {
     toast.show(e.message || '识别失败，请检查图片格式或 API Key 配置');
     itemScan.currentStep = -1;
@@ -203,55 +427,138 @@ async function startItemScan() {
   }
 }
 
-function toggleScanSeason(s: string) {
-  const idx = itemScan.form.seasons.indexOf(s);
-  if (idx > -1) itemScan.form.seasons.splice(idx, 1);
-  else itemScan.form.seasons.push(s);
-  itemScan.isCorrected = true;
+function toggleAll() {
+  const next = !allSelected.value;
+  selectablePieces.value.forEach((p) => {
+    p.selected = next;
+  });
 }
 
-function addScanTag() {
-  const v = itemScan.newTag.trim();
-  if (v && !itemScan.form.styleTags.includes(v)) {
-    itemScan.form.styleTags.push(v);
-    itemScan.isCorrected = true;
+function togglePieceSeason(p: ScanPiece, s: string) {
+  const idx = p.seasons.indexOf(s);
+  if (idx > -1) p.seasons.splice(idx, 1);
+  else p.seasons.push(s);
+  p.seasons.sort((a, b) => SEASON_OPTIONS.indexOf(a) - SEASON_OPTIONS.indexOf(b));
+  p.corrected = true;
+}
+
+function removeTag(p: ScanPiece, index: number) {
+  p.styleTags.splice(index, 1);
+  p.corrected = true;
+}
+
+function addTag(p: ScanPiece, raw?: string) {
+  const v = (raw ?? p.newTag).trim();
+  if (v && !p.styleTags.includes(v)) {
+    p.styleTags.push(v);
+    p.corrected = true;
   }
-  itemScan.newTag = '';
+  p.newTag = '';
 }
 
-async function saveScannedItem() {
-  if (!itemScan.done) return;
+function onTagEnter(e: KeyboardEvent, p: ScanPiece) {
+  if (e.isComposing) return;
+  addTag(p);
+}
+
+function tagSuggestions(p: ScanPiece) {
+  return ALL_STYLE_OPTIONS.filter((t) => !p.styleTags.includes(t)).slice(0, 5);
+}
+
+function setPieceColor(p: ScanPiece, sw: (typeof COLOR_SWATCHES)[number]) {
+  p.color = sw.name;
+  p.colorHex = sw.hex;
+  p.corrected = true;
+}
+
+function summaryLine(p: ScanPiece) {
+  if (p.saved) return '已添加到衣橱';
+  if (p.duplicateOf) return `衣橱已有相似「${p.duplicateOf}」，已默认不勾选`;
+  const parts = [p.seasons.join(' · '), ...p.styleTags.slice(0, 2)].filter(Boolean);
+  return parts.join(' · ') || '点击补充季节与风格';
+}
+
+async function saveSelectedPieces() {
+  const targets = selectablePieces.value.filter((p) => p.selected);
+  if (!targets.length || savingItem.value) return;
   savingItem.value = true;
-  try {
-    const created = await wardrobeStore.createItem({
-      name: itemScan.form.name || '未命名衣物',
-      category: itemScan.form.category,
-      color: itemScan.form.color,
-      colorHex: itemScan.form.colorHex,
-      seasons: itemScan.form.seasons.length ? [...itemScan.form.seasons] : ['秋'],
-      styleTags: itemScan.form.styleTags.length ? [...itemScan.form.styleTags] : ['日常百搭'],
-      material: itemScan.form.material || undefined,
-      price: itemScan.form.price !== '' && Number(itemScan.form.price) >= 0 ? Number(itemScan.form.price) : undefined,
-      svgType: itemScan.form.svgType,
-      originalImageUrl: itemScan.originalImageUrl || undefined,
-      processedImageUrl: itemScan.processedImageUrl || `svg://${itemScan.form.svgType}`,
-      sourceType: itemScan.selectedSample?.sourceType || 'photo',
-      isManuallyCorrected: itemScan.isCorrected,
-      aiRawResult: itemScan.aiRawResult || undefined,
-    });
+  let ok = 0;
+  let failed = 0;
+  let lastError = '';
+  let imageFallbacks = 0;
+  for (const p of targets) {
+    try {
+      // 多件识别的单品：等该件抠图完成，再把裁剪图 / 抠图上传到自己的上传目录，入库使用服务端返回的 URL
+      let originalUrl = p.originalImageUrl;
+      let processedUrl = p.processedImageUrl;
+      if (p.cropFile) {
+        await waitForPieceCutout(p);
+        processedUrl = `svg://${p.svgType}`;
+        try {
+          const fd = new FormData();
+          fd.append('file', p.cropFile);
+          if (p.cutoutFile) fd.append('cutoutFile', p.cutoutFile);
+          const stored = await visionApi.storeItemImage(fd);
+          originalUrl = stored.originalImageUrl;
+          processedUrl = stored.processedImageUrl;
+        } catch {
+          imageFallbacks += 1; // 上传失败时仍可入库，退回整图 + 插画占位
+        }
+      }
+      if (processedUrl.startsWith('data:')) processedUrl = `svg://${p.svgType}`;
+      await wardrobeStore.createItem({
+        name: p.name.trim() || '未命名衣物',
+        category: p.category,
+        color: p.color,
+        colorHex: p.colorHex,
+        seasons: p.seasons.length ? [...p.seasons] : ['春', '秋'],
+        styleTags: p.styleTags.length ? [...p.styleTags] : ['日常百搭'],
+        material: p.material || undefined,
+        price: p.price !== '' && Number(p.price) >= 0 ? Number(p.price) : undefined,
+        svgType: p.svgType,
+        originalImageUrl: originalUrl || undefined,
+        processedImageUrl: processedUrl || `svg://${p.svgType}`,
+        sourceType: itemScan.sample?.sourceType || 'photo',
+        isManuallyCorrected: p.corrected,
+        aiRawResult: p.aiRawResult || undefined,
+      });
+      p.saved = true;
+      p.selected = false;
+      p.expanded = false;
+      ok += 1;
+    } catch (e: any) {
+      failed += 1;
+      lastError = e?.message || '入库失败';
+    }
+  }
+  savingItem.value = false;
+  if (ok > 0) {
     toast.show(
-      `已成功存入「${created.name}」到 @${authStore.user?.username} 的衣橱`,
+      `已添加 ${ok} 件到衣橱${failed ? `，${failed} 件失败` : ''}${imageFallbacks ? `（${imageFallbacks} 件图片上传失败，已用占位图）` : ''}`,
       '去衣橱查看',
       () => router.push('/wardrobe')
     );
-  } catch (e: any) {
-    toast.show(e.message || '入库失败');
-  } finally {
-    savingItem.value = false;
+  } else {
+    toast.show(lastError || '入库失败');
   }
 }
 
-// ==================== Mode B: Street Snap Inspiration Breakdown ====================
+function toggleExpand(p: ScanPiece) {
+  const next = !p.expanded;
+  itemScan.pieces.forEach((x) => {
+    x.expanded = false;
+  });
+  p.expanded = next;
+}
+
+function restartScan() {
+  selectedFile.value = null;
+  itemScan.sample = null;
+  itemScan.uploadedOriginalDataUrl = null;
+  resetScanResult();
+}
+
+// ==================== 模式 B：穿搭灵感街拍拆解 ====================
 const inspFileInputRef = ref<HTMLInputElement | null>(null);
 const inspFile = ref<File | null>(null);
 const inspUploadedPreview = ref<string | null>(null);
@@ -323,8 +630,20 @@ async function runInspirationAnalysis() {
   }
 }
 
-onMounted(() => {
+// 仅在进入「街拍找同款」时才请求拆解，避免录入页每次打开都多发一次请求
+let inspirationLoaded = false;
+function ensureInspirationLoaded() {
+  if (inspirationLoaded) return;
+  inspirationLoaded = true;
   runInspirationAnalysis();
+}
+
+onMounted(() => {
+  if (scanMode.value === 'inspiration') ensureInspirationLoaded();
+});
+
+watch(scanMode, (m) => {
+  if (m === 'inspiration') ensureInspirationLoaded();
 });
 
 function sleep(ms: number) {
@@ -334,385 +653,288 @@ function sleep(ms: number) {
 
 <template>
   <section class="space-y-6">
-    <!-- Mode Segmented Switch -->
+    <!-- 模式切换 -->
     <div class="flex justify-center">
-      <div class="inline-flex p-1.5 rounded-2xl bg-oat-200/80 border border-oat-300">
+      <div class="inline-flex p-1 rounded-full bg-[#F5F5F5]" role="tablist" aria-label="识别模式">
         <button
+          role="tab"
+          :aria-selected="scanMode === 'item'"
           @click="scanMode = 'item'"
-          class="px-5 py-2 rounded-xl text-[13.5px] font-medium transition flex items-center gap-2"
-          :class="scanMode === 'item' ? 'bg-white text-charcoal shadow-sm' : 'text-warmgray hover:text-charcoal'"
+          class="px-5 py-2 rounded-full text-[13px] font-medium transition"
+          :class="scanMode === 'item' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
         >
-          <AppIcon name="camera" :size="15" />
-          模式 A：单品入库 & 智能抠图
+          录入衣物
         </button>
         <button
+          role="tab"
+          :aria-selected="scanMode === 'inspiration'"
           @click="scanMode = 'inspiration'"
-          class="px-5 py-2 rounded-xl text-[13.5px] font-medium transition flex items-center gap-2"
-          :class="scanMode === 'inspiration' ? 'bg-white text-charcoal shadow-sm' : 'text-warmgray hover:text-charcoal'"
+          class="px-5 py-2 rounded-full text-[13px] font-medium transition"
+          :class="scanMode === 'inspiration' ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
         >
-          <AppIcon name="scan" :size="15" />
-          模式 B：穿搭灵感拆解 & 找同款
+          街拍找同款
         </button>
       </div>
     </div>
 
-    <!-- ==================== 模式 A：单品入库 & 5 步复核 ==================== -->
-    <div v-if="scanMode === 'item'" class="space-y-5">
-      <!-- 5-Step Progress Bar -->
-      <div class="bg-white rounded-2xl border border-oat-300 px-5 py-4 shadow-card">
-        <div class="grid grid-cols-5 gap-2">
-          <div v-for="(step, idx) in SCAN_STEPS" :key="idx" class="flex flex-col sm:flex-row items-center gap-2">
-            <div
-              class="w-7 h-7 rounded-full flex items-center justify-center font-mono text-[12px] font-semibold shrink-0 transition-all duration-300"
-              :class="
-                itemScan.currentStep > idx
-                  ? 'bg-emerald-600 text-white'
-                  : itemScan.currentStep === idx && itemScan.isScanning
-                    ? 'bg-terracotta text-white ring-4 ring-terracotta-light'
-                    : itemScan.currentStep === idx && itemScan.done
-                      ? 'bg-charcoal text-white'
-                      : 'bg-oat-200 text-warmgray'
-              "
-            >
-              <AppIcon v-if="itemScan.currentStep > idx" name="check" :size="14" />
-              <span v-else>{{ idx + 1 }}</span>
-            </div>
-            <span
-              class="text-[11px] sm:text-[12.5px] text-center sm:text-left font-medium transition"
-              :class="itemScan.currentStep >= idx ? 'text-charcoal' : 'text-warmgray'"
-            >
-              {{ step }}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <!-- Left Upload & Cutout Studio -->
-        <div class="lg:col-span-6 bg-white rounded-3xl border border-oat-300 shadow-editorial p-6 flex flex-col justify-between">
-          <div>
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="font-serif text-[17px] font-semibold text-charcoal">图像采集与去背景工作台</h3>
-              <div v-if="itemScan.done" class="inline-flex p-1 rounded-xl bg-oat-100 border border-oat-300 text-[12px]">
-                <button
-                  @click="itemScan.viewMode = 'original'"
-                  class="px-3 py-1 rounded-lg font-medium transition"
-                  :class="itemScan.viewMode === 'original' ? 'bg-white text-charcoal shadow-sm' : 'text-warmgray'"
-                >
-                  原图对比
-                </button>
-                <button
-                  @click="itemScan.viewMode = 'cutout'"
-                  class="px-3 py-1 rounded-lg font-medium transition"
-                  :class="itemScan.viewMode === 'cutout' ? 'bg-charcoal text-white shadow-sm' : 'text-warmgray'"
-                >
-                  纯净抠图
-                </button>
-              </div>
-            </div>
-
-            <div
-              class="relative rounded-2xl border-2 border-dashed overflow-hidden aspect-[4/3] flex items-center justify-center transition"
-              :class="
-                itemScan.selectedSample || itemScan.uploadedOriginalDataUrl
-                  ? itemScan.done && itemScan.viewMode === 'cutout'
-                    ? 'border-oat-300 cutout-checker'
-                    : 'border-oat-300 bg-oat-100'
-                  : 'border-oat-400 bg-oat-50 hover:bg-oat-100 cursor-pointer'
-              "
-              @click="!itemScan.selectedSample && !itemScan.uploadedOriginalDataUrl && triggerFileUpload()"
-            >
-              <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleFileUpload" />
-
-              <div v-if="!itemScan.selectedSample && !itemScan.uploadedOriginalDataUrl" class="text-center p-6">
-                <div
-                  class="w-14 h-14 rounded-2xl bg-white border border-oat-300 shadow-sm flex items-center justify-center mx-auto mb-3 text-charcoal"
-                >
-                  <AppIcon name="upload" :size="24" />
-                </div>
-                <p class="font-medium text-charcoal text-[14px]">点击上传衣物实物照或电商订单截图</p>
-                <p class="text-[12px] text-warmgray mt-1">支持 JPG / PNG / WEBP（≤10MB），自动魔数校验与本地 AI 抠图</p>
-              </div>
-
-              <div v-else class="w-full h-full relative flex items-center justify-center">
-                <!-- Background simulation for preset samples in original mode -->
-                <div
-                  v-if="itemScan.selectedSample && (!itemScan.done || itemScan.viewMode === 'original')"
-                  class="absolute inset-0 pointer-events-none transition-opacity duration-500"
-                >
-                  <div
-                    v-if="itemScan.selectedSample.sourceType === 'screenshot'"
-                    class="w-full h-full bg-[#F6F6F6] p-4 flex flex-col justify-between"
-                  >
-                    <div class="flex items-center justify-between text-[11px] text-neutral-400 border-b border-neutral-200 pb-2">
-                      <span class="font-semibold text-orange-500">淘宝订单详情 · 已签收</span>
-                      <span class="font-mono">订单号 202611229081</span>
-                    </div>
-                    <div
-                      class="bg-white/80 rounded-xl p-2.5 border border-neutral-200 flex items-center justify-between text-[11px] text-neutral-600 z-10"
-                    >
-                      <span>法式复古重磅条纹海魂衫长袖 · 藏蓝米白 L码</span>
-                      <span class="font-mono font-semibold text-orange-600">¥129.00</span>
-                    </div>
-                  </div>
-                  <div
-                    v-else
-                    class="w-full h-full relative overflow-hidden"
-                    style="background: linear-gradient(160deg, #d9cfc1 0%, #c5b8a5 55%, #b5a48f 100%)"
-                  >
-                    <svg viewBox="0 0 400 300" class="w-full h-full opacity-55" preserveAspectRatio="none">
-                      <rect x="0" y="0" width="400" height="190" fill="#E6DFD5" />
-                      <line x1="0" y1="190" x2="400" y2="190" stroke="#A69682" stroke-width="2" />
-                      <path d="M0,190 L400,190 L400,300 L0,300 Z" fill="#C4B097" />
-                      <rect x="24" y="32" width="76" height="115" rx="6" fill="#D2C7B8" stroke="#BEB1A0" />
-                      <circle cx="348" cy="64" r="24" fill="#DDD4C7" />
-                    </svg>
-                    <span class="absolute top-3 left-3 text-[10.5px] bg-black/50 text-white px-2.5 py-1 rounded-full backdrop-blur-sm">
-                      原始杂乱背景照
-                    </span>
-                  </div>
-                </div>
-
-                <span
-                  v-if="itemScan.done && itemScan.viewMode === 'cutout'"
-                  class="absolute top-3 left-3 text-[10.5px] bg-emerald-700 text-white px-2.5 py-1 rounded-full z-10 flex items-center gap-1 shadow-sm"
-                >
-                  <AppIcon name="check" :size="12" />
-                  {{ itemScan.cutoutFallback ? '已保留原图（降级）' : '已智能抠图 · 透明底平铺图' }}
-                </span>
-
-                <div
-                  class="relative z-10 w-56 h-56 flex items-center justify-center transition-all duration-500"
-                  :class="itemScan.done && itemScan.viewMode === 'cutout' ? 'drop-shadow-xl scale-105' : ''"
-                >
-                  <img
-                    v-if="itemScan.uploadedOriginalDataUrl"
-                    :src="
-                      itemScan.viewMode === 'cutout' && itemScan.uploadedCutoutDataUrl
-                        ? itemScan.uploadedCutoutDataUrl
-                        : itemScan.uploadedOriginalDataUrl
-                    "
-                    alt="已上传衣物预览"
-                    class="max-w-full max-h-full object-contain rounded-xl"
-                  />
-                  <GarmentSvg
-                    v-else-if="itemScan.selectedSample"
-                    :type="itemScan.selectedSample.svgType"
-                    :color="itemScan.form.colorHex || itemScan.selectedSample.colorHex"
-                    class="w-full h-full"
-                  />
-                </div>
-
-                <!-- Scan Laser Overlay -->
-                <div v-if="itemScan.isScanning" class="absolute inset-0 z-20 bg-charcoal/15 backdrop-blur-[1px] overflow-hidden">
-                  <div
-                    class="scan-beam w-full h-16 bg-gradient-to-b from-transparent via-terracotta/40 to-terracotta/70 border-b-2 border-terracotta"
-                  />
-                  <div
-                    class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-charcoal/90 text-white text-[12px] font-mono flex items-center gap-2 shadow-lg whitespace-nowrap"
-                  >
-                    <span class="w-2 h-2 rounded-full bg-terracotta animate-ping" />
-                    {{ SCAN_STEPS[itemScan.currentStep] || '处理中' }}...
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Preset Sample Selector + Local File Trigger -->
-            <div class="mt-4">
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-[12px] font-medium text-warmgray">一键加载测试样本（或上传真实本地图片）：</span>
-                <button @click="triggerFileUpload" class="text-[12px] text-terracotta hover:underline font-medium">
-                  选择本地文件
-                </button>
-              </div>
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <button
-                  v-for="sample in SCAN_SAMPLES"
-                  :key="sample.id"
-                  @click="selectScanSample(sample)"
-                  class="text-left p-2.5 rounded-xl border text-[12px] transition flex items-center gap-2.5"
-                  :class="
-                    itemScan.selectedSample?.id === sample.id
-                      ? 'bg-terracotta-light/60 border-terracotta text-charcoal font-medium'
-                      : 'bg-oat-50 border-oat-300 hover:bg-oat-100 text-charcoal-soft'
-                  "
-                >
-                  <div class="w-8 h-8 rounded-lg bg-white border border-oat-200 p-1 shrink-0">
-                    <GarmentSvg :type="sample.svgType" :color="sample.colorHex" class="w-full h-full" />
-                  </div>
-                  <div class="min-w-0">
-                    <div class="truncate font-medium text-[11.5px]">{{ sample.shortLabel }}</div>
-                    <div class="text-[10px] text-warmgray">{{ sample.sourceLabel }}</div>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-5 pt-4 border-t border-oat-200">
+    <!-- ==================== 录入衣物：一图多件 ==================== -->
+    <div v-if="scanMode === 'item'" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <!-- 左：照片 -->
+      <div class="lg:col-span-5 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6 flex flex-col gap-4">
+        <div v-if="itemScan.done && itemScan.uploadedCutoutDataUrl" class="flex items-center justify-end gap-3">
+          <div
+            class="inline-flex p-0.5 rounded-full bg-[#F5F5F5] text-[12px]"
+            role="group"
+            aria-label="预览方式"
+          >
             <button
-              @click="startItemScan"
-              :disabled="(!itemScan.selectedSample && !itemScan.uploadedOriginalDataUrl) || itemScan.isScanning"
-              class="w-full py-3 rounded-2xl bg-charcoal hover:bg-charcoal-hover disabled:bg-oat-300 disabled:text-warmgray text-white text-[14px] font-medium shadow-sm transition flex items-center justify-center gap-2"
+              @click="itemScan.viewMode = 'original'"
+              class="px-3 py-1 rounded-full font-medium transition"
+              :class="itemScan.viewMode === 'original' ? 'bg-black text-white' : 'text-[#666666]'"
             >
-              <AppIcon name="sparkles" :size="16" />
-              {{
-                itemScan.isScanning
-                  ? '多模态解析与抠图中...'
-                  : itemScan.done
-                    ? '重新执行 AI 智能识别'
-                    : '开始 AI 智能识别'
-              }}
+              原图
+            </button>
+            <button
+              @click="itemScan.viewMode = 'cutout'"
+              class="px-3 py-1 rounded-full font-medium transition"
+              :class="itemScan.viewMode === 'cutout' ? 'bg-black text-white' : 'text-[#666666]'"
+            >
+              抠图
             </button>
           </div>
         </div>
 
-        <!-- Right Attribute Review & Manual Correction Form -->
-        <div class="lg:col-span-6 bg-white rounded-3xl border border-oat-300 shadow-editorial p-6 flex flex-col justify-between">
-          <div>
-            <div class="flex items-center justify-between mb-4">
-              <div>
-                <h3 class="font-serif text-[17px] font-semibold text-charcoal">AI 属性解析与人工复核</h3>
-                <p class="text-[12px] text-warmgray mt-0.5">
-                  支持一键点选胶囊纠偏，存入当前账号（@{{ authStore.user?.username }}）
-                </p>
+        <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleFileUpload" />
+
+        <div
+          class="relative rounded-2xl overflow-hidden aspect-[4/3] lg:aspect-square flex items-center justify-center"
+          :class="
+            hasSource
+              ? itemScan.done && itemScan.viewMode === 'cutout'
+                ? 'cutout-checker'
+                : 'bg-[#F5F5F5]'
+              : 'bg-[#FAFAFA] border border-dashed border-black/[0.16]'
+          "
+        >
+          <button
+            v-if="!hasSource"
+            type="button"
+            @click="triggerFileUpload"
+            class="w-full h-full flex flex-col items-center justify-center text-center p-6 hover:bg-[#F5F5F5] transition"
+          >
+            <span class="w-12 h-12 rounded-full bg-white border border-black/[0.08] flex items-center justify-center mb-3 text-black">
+              <AppIcon name="upload" :size="20" />
+            </span>
+            <span class="text-[14px] font-medium text-black">上传衣物或整套穿搭照片</span>
+            <span class="text-[12px] text-[#666666] mt-1">AI 自动识别并拆分上衣、裤子、鞋等单品</span>
+            <span class="mt-4 px-5 py-2 rounded-full bg-black text-white text-[13px] font-medium">选择照片</span>
+          </button>
+
+          <template v-else>
+            <img
+              v-if="itemScan.uploadedOriginalDataUrl"
+              :src="
+                itemScan.viewMode === 'cutout' && itemScan.uploadedCutoutDataUrl
+                  ? itemScan.uploadedCutoutDataUrl
+                  : itemScan.uploadedOriginalDataUrl
+              "
+              alt="已上传的照片"
+              class="max-w-full max-h-full object-contain"
+            />
+            <div
+              v-else-if="itemScan.sample"
+              class="w-full px-6 flex items-center justify-center gap-3"
+              :aria-label="`示例：${itemScan.sample.shortLabel}`"
+            >
+              <div
+                v-for="p in itemScan.sample.pieces"
+                :key="p.svgType"
+                class="aspect-square"
+                :class="itemScan.sample.pieces.length > 1 ? 'w-1/3' : 'w-3/5'"
+              >
+                <GarmentSvg :type="p.svgType" :color="p.colorHex" class="w-full h-full" />
               </div>
-              <span
-                v-if="itemScan.isCorrected"
-                class="text-[11px] font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200"
-              >
-                已人工修正
-              </span>
-              <span
-                v-else-if="itemScan.done"
-                class="text-[11px] font-mono px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
-              >
-                置信度 {{ itemScan.confidence }}%
-              </span>
             </div>
 
-            <div
-              v-if="itemScan.notice && itemScan.done"
-              class="mb-4 px-3.5 py-2.5 rounded-2xl bg-oat-50 border border-oat-200 text-[12px] text-charcoal-soft flex items-center justify-between gap-2"
-            >
-              <span>{{ itemScan.notice }}</span>
-              <button
-                v-if="!itemScan.usedRealLlm"
-                @click="router.push('/profile')"
-                class="text-terracotta font-medium shrink-0 hover:underline"
+            <div v-if="itemScan.isScanning" class="absolute inset-0 z-20 bg-white/40 backdrop-blur-[1px] overflow-hidden">
+              <div class="scan-beam w-full h-16 bg-gradient-to-b from-transparent via-black/10 to-black/30 border-b-2 border-black" />
+              <div
+                class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-black text-white text-[12px] font-mono whitespace-nowrap"
+                role="status"
+                aria-live="polite"
               >
-                配置 API Key →
+                {{ SCAN_STEPS[itemScan.currentStep] || '处理中' }}…
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 示例：仅在还没上传真实照片时出现，点选即自动识别 -->
+        <div v-if="!itemScan.uploadedOriginalDataUrl" class="space-y-2">
+          <span class="block text-[12px] text-[#666666]">试试示例</span>
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-for="s in SAMPLES"
+              :key="s.id"
+              @click="selectScanSample(s)"
+              :disabled="itemScan.isScanning"
+              :aria-pressed="itemScan.sample?.id === s.id"
+              class="px-3.5 py-1.5 rounded-full border text-[12px] font-medium transition disabled:opacity-50"
+              :class="
+                itemScan.sample?.id === s.id
+                  ? 'border-black bg-black text-white'
+                  : 'border-black/[0.08] bg-white text-black hover:border-black/30'
+              "
+            >
+              {{ s.shortLabel }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 次级操作：主按钮只留给右侧「添加到衣橱」 -->
+        <div v-if="hasSource && !itemScan.isScanning" class="flex items-center gap-2">
+          <button
+            @click="startItemScan"
+            class="flex-1 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] text-black text-[13px] font-medium transition flex items-center justify-center gap-1.5"
+          >
+            <AppIcon name="refresh" :size="14" />
+            重新识别
+          </button>
+          <button
+            @click="triggerFileUpload"
+            class="flex-1 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] text-black text-[13px] font-medium transition flex items-center justify-center gap-1.5"
+          >
+            <AppIcon name="upload" :size="14" />
+            {{ itemScan.uploadedOriginalDataUrl ? '更换照片' : '上传照片' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 右：识别结果清单 -->
+      <div class="lg:col-span-7 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6 flex flex-col">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-baseline gap-2">
+            <h3 class="text-[16px] font-semibold text-black">识别结果</h3>
+            <span v-if="itemScan.done" class="font-mono text-[12px] text-[#666666]">共 {{ itemScan.pieces.length }} 件</span>
+          </div>
+          <button
+            v-if="itemScan.done && selectablePieces.length > 1"
+            @click="toggleAll"
+            class="text-[12.5px] font-medium text-black"
+          >
+            {{ allSelected ? '取消全选' : '全选' }}
+          </button>
+        </div>
+
+        <p v-if="itemScan.done && itemScan.notice" class="mt-2 text-[12px] leading-relaxed text-[#666666]">
+          {{ itemScan.notice }}
+          <button
+            v-if="!itemScan.usedRealLlm"
+            @click="router.push({ path: '/profile', query: { tab: 'settings', panel: 'ai' } })"
+            class="ml-1 font-medium text-black underline underline-offset-4"
+          >
+            配置 API Key 以识别真实照片
+          </button>
+        </p>
+
+        <!-- 空态 -->
+        <div
+          v-if="!itemScan.done && !itemScan.isScanning"
+          class="mt-4 flex-1 min-h-[260px] rounded-2xl bg-[#FAFAFA] border border-dashed border-black/[0.16] flex flex-col items-center justify-center text-center px-6"
+        >
+          <AppIcon name="shirt" :size="26" class="text-black/30 mb-2" />
+          <p class="text-[13.5px] font-medium text-black">识别出的单品会出现在这里</p>
+        </div>
+
+        <!-- 识别中骨架 -->
+        <ul v-else-if="itemScan.isScanning" class="mt-4 space-y-4 animate-pulse" aria-busy="true">
+          <li v-for="n in 3" :key="n" class="flex items-center gap-3">
+            <span class="w-6 h-6 rounded-full bg-[#EDEDED]" />
+            <span class="w-14 h-14 rounded-xl bg-[#EDEDED]" />
+            <span class="flex-1 space-y-2">
+              <span class="block h-3.5 w-2/3 rounded bg-[#EDEDED]" />
+              <span class="block h-3 w-1/2 rounded bg-[#F5F5F5]" />
+            </span>
+          </li>
+        </ul>
+
+        <!-- 清单 -->
+        <ul v-else class="mt-2 divide-y divide-black/[0.06]">
+          <li v-for="p in itemScan.pieces" :key="p.uid" class="py-3" :class="p.saved ? 'opacity-60' : ''">
+            <div class="flex items-center gap-3">
+              <button
+                type="button"
+                role="checkbox"
+                :aria-checked="p.selected || p.saved"
+                :aria-label="`选择 ${p.name}`"
+                :disabled="p.saved"
+                @click="p.selected = !p.selected"
+                class="w-6 h-6 rounded-full border flex items-center justify-center shrink-0 transition"
+                :class="
+                  p.saved
+                    ? 'bg-[#F5F5F5] border-black/[0.08] text-[#666666]'
+                    : p.selected
+                      ? 'bg-black border-black text-white'
+                      : 'bg-white border-black/25 hover:border-black'
+                "
+              >
+                <AppIcon v-if="p.selected || p.saved" name="check" :size="13" />
+              </button>
+
+              <div
+                class="w-14 h-14 rounded-xl bg-[#F5F5F5] ring-1 ring-inset ring-black/[0.04] p-1.5 shrink-0"
+                :class="[
+                  !p.selected && !p.saved && p.duplicateOf ? 'opacity-50' : '',
+                  p.cutoutStatus === 'running' ? 'animate-pulse' : '',
+                ]"
+                :title="p.cutoutStatus === 'running' ? '正在抠图…' : undefined"
+              >
+                <GarmentVisual :image-url="p.processedImageUrl" :svg-type="p.svgType" :color-hex="p.colorHex" :alt="p.name" />
+              </div>
+
+              <button
+                type="button"
+                class="min-w-0 flex-1 flex items-center gap-2 text-left"
+                :class="!p.selected && !p.saved && p.duplicateOf ? 'opacity-60' : ''"
+                :aria-expanded="p.expanded"
+                :aria-label="`${p.expanded ? '收起' : '编辑'} ${p.name}`"
+                :disabled="p.saved"
+                @click="toggleExpand(p)"
+              >
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-center gap-2">
+                    <span class="text-[11px] px-2 py-0.5 rounded-full bg-[#F5F5F5] text-[#666666] shrink-0">
+                      {{ categoryLabel(p.category) }}
+                    </span>
+                    <span class="text-[14px] font-medium text-black truncate">{{ p.name }}</span>
+                  </span>
+                  <span class="block mt-1 text-[12px] text-[#666666] truncate">{{ summaryLine(p) }}</span>
+                </span>
+                <AppIcon
+                  v-if="!p.saved"
+                  name="chevron-right"
+                  :size="16"
+                  class="text-[#666666] transition-transform"
+                  :class="p.expanded ? 'rotate-90' : ''"
+                />
               </button>
             </div>
 
-            <div
-              v-if="!itemScan.done && !itemScan.isScanning"
-              class="py-16 text-center rounded-2xl bg-oat-50 border border-dashed border-oat-300"
-            >
-              <AppIcon name="sliders" :size="28" class="mx-auto text-oat-400 mb-2" />
-              <p class="text-[13px] text-warmgray">请先在左侧选择测试样本或上传真实图片，</p>
-              <p class="text-[13px] text-warmgray">点击「开始 AI 智能识别」后将在此回显结构化属性。</p>
-            </div>
-
-            <div v-else-if="itemScan.isScanning" class="space-y-4 py-4 animate-pulse">
-              <div class="h-10 bg-oat-200 rounded-xl w-3/4" />
-              <div class="flex gap-2">
-                <div v-for="n in 5" :key="n" class="h-8 w-16 bg-oat-200 rounded-full" />
-              </div>
-              <div class="h-12 bg-oat-200 rounded-xl w-full" />
-              <div class="h-20 bg-oat-200 rounded-xl w-full" />
-            </div>
-
-            <div v-else class="space-y-4">
-              <div class="grid grid-cols-12 gap-3">
-                <div class="col-span-8">
-                  <label class="block text-[12px] font-medium text-warmgray mb-1.5">单品名称</label>
-                  <input
-                    v-model="itemScan.form.name"
-                    @input="itemScan.isCorrected = true"
-                    type="text"
-                    class="w-full px-3.5 py-2.5 rounded-xl bg-oat-50 border border-oat-300 focus:border-charcoal focus:bg-white outline-none text-[14px] font-medium text-charcoal transition"
-                  />
-                </div>
-                <div class="col-span-4">
-                  <label class="block text-[12px] font-medium text-warmgray mb-1.5">购入价 ¥（CPW）</label>
-                  <input
-                    v-model="itemScan.form.price"
-                    @input="itemScan.isCorrected = true"
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder="选填"
-                    class="w-full px-3 py-2.5 rounded-xl bg-oat-50 border border-oat-300 focus:border-charcoal focus:bg-white outline-none font-mono text-[14px] font-medium text-charcoal transition"
-                  />
-                </div>
-              </div>
-
+            <!-- 展开：只露出季节 + 风格标签（名称 / 品类 / 颜色 / 价格收在「更多信息」） -->
+            <div v-if="p.expanded && !p.saved" class="mt-3 space-y-4">
               <div>
-                <label class="block text-[12px] font-medium text-warmgray mb-1.5">一级品类（点击修正）</label>
-                <div class="flex flex-wrap gap-2">
-                  <button
-                    v-for="cat in CATEGORY_OPTIONS"
-                    :key="cat.key"
-                    @click="itemScan.form.category = cat.key; itemScan.isCorrected = true"
-                    class="px-3.5 py-1.5 rounded-full text-[12.5px] font-medium border transition"
-                    :class="
-                      itemScan.form.category === cat.key
-                        ? 'bg-charcoal text-white border-charcoal'
-                        : 'bg-oat-50 text-charcoal-soft border-oat-300 hover:bg-oat-200'
-                    "
-                  >
-                    {{ cat.label }}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between mb-1.5">
-                  <label class="text-[12px] font-medium text-warmgray">主色调色盘</label>
-                  <span class="text-[12px] font-medium text-charcoal">{{ itemScan.form.color }}</span>
-                </div>
-                <div class="flex flex-wrap gap-2.5">
-                  <button
-                    v-for="sw in COLOR_SWATCHES"
-                    :key="sw.name"
-                    @click="
-                      itemScan.form.color = sw.name;
-                      itemScan.form.colorHex = sw.hex;
-                      itemScan.isCorrected = true;
-                    "
-                    class="w-7 h-7 rounded-full border-2 transition flex items-center justify-center shadow-sm"
-                    :style="{ backgroundColor: sw.hex }"
-                    :class="
-                      itemScan.form.color === sw.name
-                        ? 'border-terracotta scale-110 ring-2 ring-terracotta-light'
-                        : 'border-white hover:scale-105'
-                    "
-                    :title="sw.name"
-                  >
-                    <AppIcon
-                      v-if="itemScan.form.color === sw.name"
-                      name="check"
-                      :size="12"
-                      :class="sw.light ? 'text-charcoal' : 'text-white'"
-                    />
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label class="block text-[12px] font-medium text-warmgray mb-1.5">适用季节（可多选）</label>
+                <div class="text-[12px] text-[#666666] mb-1.5">季节</div>
                 <div class="flex flex-wrap gap-2">
                   <button
                     v-for="s in SEASON_OPTIONS"
                     :key="s"
-                    @click="toggleScanSeason(s)"
-                    class="px-3.5 py-1.5 rounded-full text-[12px] font-medium border transition"
+                    @click="togglePieceSeason(p, s)"
+                    :aria-pressed="p.seasons.includes(s)"
+                    class="min-w-[44px] px-3.5 py-1.5 rounded-full text-[12.5px] font-medium border transition"
                     :class="
-                      itemScan.form.seasons.includes(s)
-                        ? 'bg-terracotta-light text-terracotta-dark border-terracotta/50'
-                        : 'bg-oat-50 text-warmgray border-oat-300 hover:bg-oat-100'
+                      p.seasons.includes(s)
+                        ? 'bg-black text-white border-black'
+                        : 'bg-white text-[#666666] border-black/[0.08] hover:border-black/30'
                     "
                   >
                     {{ s }}
@@ -721,82 +943,179 @@ function sleep(ms: number) {
               </div>
 
               <div>
-                <label class="block text-[12px] font-medium text-warmgray mb-1.5">风格语义标签</label>
-                <div class="flex flex-wrap gap-1.5 mb-2">
+                <div class="text-[12px] text-[#666666] mb-1.5">风格标签</div>
+                <div class="flex flex-wrap gap-2">
                   <span
-                    v-for="(tag, i) in itemScan.form.styleTags"
+                    v-for="(tag, i) in p.styleTags"
                     :key="tag"
-                    class="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-oat-100 border border-oat-300 text-[12px] text-charcoal"
+                    class="inline-flex items-center gap-1 pl-3 pr-1.5 py-1 rounded-full bg-black text-white text-[12px]"
                   >
                     {{ tag }}
                     <button
-                      @click="
-                        itemScan.form.styleTags.splice(i, 1);
-                        itemScan.isCorrected = true;
-                      "
-                      class="text-warmgray hover:text-terracotta"
+                      @click="removeTag(p, i)"
+                      :aria-label="`移除标签 ${tag}`"
+                      class="w-5 h-5 rounded-full flex items-center justify-center text-white/70 hover:text-white"
                     >
-                      ×
+                      <AppIcon name="x" :size="12" />
                     </button>
                   </span>
-                </div>
-                <div class="flex gap-2">
-                  <input
-                    v-model="itemScan.newTag"
-                    @keyup.enter="addScanTag"
-                    type="text"
-                    placeholder="输入自定义标签后按回车，如：法式复古"
-                    class="flex-1 px-3 py-1.5 rounded-xl bg-oat-50 border border-oat-300 text-[12.5px] outline-none focus:border-charcoal"
-                  />
                   <button
-                    @click="addScanTag"
-                    class="px-3 py-1.5 rounded-xl bg-oat-200 hover:bg-oat-300 text-[12px] font-medium text-charcoal"
+                    v-for="t in tagSuggestions(p)"
+                    :key="t"
+                    @click="addTag(p, t)"
+                    class="px-3 py-1 rounded-full border border-dashed border-black/25 text-[12px] text-[#666666] hover:border-black hover:text-black transition"
                   >
-                    添加
+                    + {{ t }}
                   </button>
+                  <input
+                    v-model="p.newTag"
+                    @keydown.enter="onTagEnter($event, p)"
+                    type="text"
+                    placeholder="+ 自定义"
+                    aria-label="自定义风格标签，回车添加"
+                    class="w-24 px-3 py-1 rounded-full border border-dashed border-black/25 bg-white focus:border-black focus:border-solid outline-none text-[12px] text-black placeholder:text-[#666666] transition"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  @click="p.moreOpen = !p.moreOpen"
+                  :aria-expanded="p.moreOpen"
+                  class="text-[12px] font-medium text-[#666666] hover:text-black inline-flex items-center gap-1"
+                >
+                  更多信息（名称 · 品类 · 颜色 · 购入价）
+                  <AppIcon name="chevron-right" :size="13" class="transition-transform" :class="p.moreOpen ? 'rotate-90' : ''" />
+                </button>
+
+                <div v-if="p.moreOpen" class="mt-3 space-y-4">
+                  <div>
+                    <label :for="`name-${p.uid}`" class="block text-[12px] text-[#666666] mb-1.5">名称</label>
+                    <input
+                      :id="`name-${p.uid}`"
+                      v-model="p.name"
+                      @input="p.corrected = true"
+                      type="text"
+                      class="w-full px-3.5 py-2 rounded-xl bg-white border border-black/[0.08] focus:border-black outline-none text-[14px] text-black transition"
+                    />
+                  </div>
+
+                  <div>
+                    <div class="text-[12px] text-[#666666] mb-1.5">品类</div>
+                    <div class="flex flex-wrap gap-2">
+                      <button
+                        v-for="cat in CATEGORY_OPTIONS"
+                        :key="cat.key"
+                        @click="
+                          p.category = cat.key;
+                          p.corrected = true;
+                        "
+                        :aria-pressed="p.category === cat.key"
+                        class="px-3.5 py-1.5 rounded-full text-[12.5px] font-medium border transition"
+                        :class="
+                          p.category === cat.key
+                            ? 'bg-black text-white border-black'
+                            : 'bg-white text-[#666666] border-black/[0.08] hover:border-black/30'
+                        "
+                      >
+                        {{ cat.label }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between mb-1.5">
+                      <span class="text-[12px] text-[#666666]">颜色</span>
+                      <span class="text-[12px] font-medium text-black">{{ p.color }}</span>
+                    </div>
+                    <div class="flex flex-wrap gap-2.5">
+                      <button
+                        v-for="sw in COLOR_SWATCHES"
+                        :key="sw.name"
+                        @click="setPieceColor(p, sw)"
+                        :aria-label="`颜色 ${sw.name}`"
+                        :aria-pressed="p.color === sw.name"
+                        class="w-7 h-7 rounded-full border transition flex items-center justify-center"
+                        :style="{ backgroundColor: sw.hex }"
+                        :class="p.color === sw.name ? 'border-black ring-2 ring-black/20 scale-110' : 'border-black/15 hover:scale-105'"
+                      >
+                        <AppIcon v-if="p.color === sw.name" name="check" :size="12" :class="sw.light ? 'text-black' : 'text-white'" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label :for="`price-${p.uid}`" class="block text-[12px] text-[#666666] mb-1.5">购入价 ¥（用于计算 CPW，选填）</label>
+                    <input
+                      :id="`price-${p.uid}`"
+                      v-model="p.price"
+                      @input="p.corrected = true"
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="如 299"
+                      class="w-40 px-3.5 py-2 rounded-xl bg-white border border-black/[0.08] focus:border-black outline-none font-mono text-[14px] text-black transition"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </li>
+        </ul>
 
-          <div class="mt-6 pt-4 border-t border-oat-200 flex items-center justify-between gap-3">
-            <span class="text-[11.5px] text-warmgray font-mono">user_id={{ authStore.user?.id }}</span>
-            <button
-              @click="saveScannedItem"
-              :disabled="!itemScan.done || savingItem"
-              class="px-6 py-2.5 rounded-full bg-terracotta hover:bg-terracotta-dark disabled:bg-oat-300 disabled:text-warmgray text-white text-[13.5px] font-medium shadow-sm transition flex items-center gap-2"
-            >
-              <AppIcon name="check" :size="16" />
-              {{ savingItem ? '正在写入衣橱...' : '确认存入我的衣橱' }}
-            </button>
+        <!-- 底部操作 -->
+        <div v-if="itemScan.done" class="mt-auto pt-5 sticky bottom-24 bg-white">
+          <div class="pt-4 border-t border-black/[0.06] flex items-center justify-between gap-3">
+            <template v-if="allSaved">
+              <button @click="restartScan" class="text-[13px] font-medium text-[#666666] hover:text-black">再识别一张</button>
+              <button
+                @click="router.push('/wardrobe')"
+                class="min-w-[160px] px-8 py-3 rounded-full bg-black hover:bg-black/85 text-white text-[14px] font-medium transition"
+              >
+                去衣橱查看
+              </button>
+            </template>
+            <template v-else>
+              <span class="text-[12.5px] text-[#666666]">
+                已选 <span class="font-mono text-black">{{ selectedCount }}</span> / {{ selectablePieces.length }}
+              </span>
+              <button
+                @click="saveSelectedPieces"
+                :disabled="selectedCount === 0 || savingItem"
+                class="min-w-[160px] px-8 py-3 rounded-full bg-black hover:bg-black/85 disabled:bg-black/15 disabled:text-black/40 text-white text-[14px] font-medium transition"
+              >
+                {{ savingItem ? '正在添加…' : '添加到衣橱' }}
+              </button>
+            </template>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ==================== 模式 B：穿搭灵感街拍拆解 ==================== -->
+    <!-- ==================== 街拍找同款 ==================== -->
     <div v-else class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <!-- Left Street Snap Canvas -->
-      <div class="lg:col-span-5 bg-white rounded-3xl border border-oat-300 shadow-editorial p-6">
+      <!-- 左：街拍图 -->
+      <div class="lg:col-span-5 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6">
         <div class="flex items-center justify-between mb-4 gap-2">
-          <h3 class="font-serif text-[17px] font-semibold text-charcoal">穿搭灵感街拍图</h3>
+          <h3 class="text-[16px] font-semibold text-black">街拍图</h3>
           <div class="flex items-center gap-1.5">
             <button
               v-for="(preset, idx) in INSPIRATION_PRESETS"
               :key="preset.id"
               @click="selectInspirationPreset(idx)"
-              class="px-2.5 py-1 rounded-lg text-[11.5px] font-medium border transition"
+              class="px-3 py-1 rounded-full text-[12px] font-medium border transition"
               :class="
                 !inspUploadedPreview && inspirationState.presetIdx === idx
-                  ? 'bg-charcoal text-white border-charcoal'
-                  : 'bg-oat-50 text-warmgray border-oat-300'
+                  ? 'bg-black text-white border-black'
+                  : 'bg-white text-[#666666] border-black/[0.08] hover:border-black/30'
               "
             >
               样本 {{ idx + 1 }}
             </button>
             <button
               @click="triggerInspUpload"
-              class="px-2.5 py-1 rounded-lg text-[11.5px] font-medium border border-terracotta/50 bg-terracotta-light/60 text-terracotta-dark hover:bg-terracotta-light transition"
+              class="px-3 py-1 rounded-full text-[12px] font-medium border border-black text-black hover:bg-[#F5F5F5] transition"
             >
               上传街拍
             </button>
@@ -804,12 +1123,12 @@ function sleep(ms: number) {
           </div>
         </div>
 
-        <div class="relative rounded-2xl overflow-hidden border border-oat-300 aspect-[3/4] flatlay-canvas p-5 flex flex-col justify-between">
+        <div class="relative rounded-2xl overflow-hidden border border-black/[0.08] aspect-[3/4] flatlay-canvas p-5 flex flex-col justify-between">
           <div class="flex items-center justify-between z-10">
-            <span class="px-2.5 py-1 rounded-full bg-white/90 backdrop-blur-sm border border-oat-300 text-[11px] font-medium text-charcoal">
+            <span class="px-2.5 py-1 rounded-full bg-white/90 backdrop-blur-sm border border-black/[0.08] text-[11px] font-medium text-black">
               {{ inspUploadedPreview ? '自定义上传街拍' : currentPreset.sourceTag }}
             </span>
-            <span class="font-mono text-[11px] text-warmgray bg-white/80 px-2 py-0.5 rounded-md">点击红点查看拆解</span>
+            <span class="text-[11px] text-[#666666] bg-white/80 px-2 py-0.5 rounded-md">点击编号查看拆解</span>
           </div>
 
           <div class="relative flex-1 my-2">
@@ -850,84 +1169,87 @@ function sleep(ms: number) {
               v-for="(item, idx) in inspirationState.items"
               :key="item.name + idx"
               @click="inspirationState.activeHotspot = idx"
+              :aria-label="`查看拆解：${item.slotLabel} ${item.name}`"
               class="absolute z-20 -translate-x-1/2 -translate-y-1/2 group"
               :style="{ left: item.posX + '%', top: item.posY + '%' }"
             >
-              <span class="hotspot-ring absolute inset-0 rounded-full bg-terracotta" />
+              <span class="hotspot-ring absolute inset-0 rounded-full bg-black/40" />
               <span
                 class="relative flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-mono font-semibold border-2 border-white shadow-md transition"
-                :class="inspirationState.activeHotspot === idx ? 'bg-charcoal text-white scale-110' : 'bg-terracotta text-white'"
+                :class="inspirationState.activeHotspot === idx ? 'bg-black text-white scale-110' : 'bg-white text-black'"
               >
                 {{ idx + 1 }}
               </span>
               <span
-                class="absolute left-7 top-1/2 -translate-y-1/2 whitespace-nowrap px-2 py-0.5 rounded-md bg-charcoal/90 text-white text-[10.5px] shadow-md pointer-events-none"
+                class="absolute left-7 top-1/2 -translate-y-1/2 whitespace-nowrap px-2 py-0.5 rounded-md bg-black text-white text-[10.5px] shadow-md pointer-events-none"
               >
                 {{ item.slotLabel }}
               </span>
             </button>
           </div>
 
-          <div class="z-10 bg-white/90 backdrop-blur-sm rounded-xl p-3 border border-oat-300/80">
-            <div class="font-serif font-semibold text-[14px] text-charcoal">
+          <div class="z-10 bg-white/90 backdrop-blur-sm rounded-xl p-3 border border-black/[0.08]">
+            <div class="font-semibold text-[14px] text-black">
               {{ inspUploadedPreview ? inspirationState.overallStyle : currentPreset.title }}
             </div>
-            <div class="text-[11.5px] text-warmgray mt-0.5">
+            <div class="text-[11.5px] text-[#666666] mt-0.5">
               {{ inspUploadedPreview ? '多模态拆解 · 自动检索个人衣橱与平替' : currentPreset.subtitle }}
             </div>
           </div>
 
-          <div v-if="inspirationState.isAnalyzing" class="absolute inset-0 z-30 bg-charcoal/20 backdrop-blur-[1px]">
-            <div class="scan-beam w-full h-20 bg-gradient-to-b from-transparent via-terracotta/40 to-terracotta/80 border-b-2 border-terracotta" />
+          <div v-if="inspirationState.isAnalyzing" class="absolute inset-0 z-30 bg-white/40 backdrop-blur-[1px]">
+            <div class="scan-beam w-full h-20 bg-gradient-to-b from-transparent via-black/10 to-black/30 border-b-2 border-black" />
           </div>
         </div>
       </div>
 
-      <!-- Right Breakdown & Matching Results -->
+      <!-- 右：拆解与比对 -->
       <div class="lg:col-span-7 space-y-5">
-        <div class="bg-white rounded-3xl border border-oat-300 shadow-card p-6">
-          <h3 class="font-serif text-[17px] font-semibold text-charcoal mb-3">告诉 AI 你的拆解需求与预算</h3>
+        <div class="bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6">
+          <h3 class="text-[16px] font-semibold text-black mb-3">拆解需求与预算</h3>
           <textarea
             v-model="inspirationState.query"
             rows="2"
-            class="w-full px-4 py-3 rounded-2xl bg-oat-50 border border-oat-300 focus:border-charcoal focus:bg-white outline-none text-[13.5px] text-charcoal resize-none transition"
+            aria-label="拆解需求"
+            class="w-full px-4 py-3 rounded-2xl bg-[#FAFAFA] border border-black/[0.08] focus:border-black focus:bg-white outline-none text-[13.5px] text-black resize-none transition"
             placeholder="输入自然语言需求..."
           />
           <div class="mt-4 flex flex-wrap items-center justify-between gap-4">
             <div class="flex items-center gap-3">
-              <label class="text-[12.5px] font-medium text-warmgray">单品预算上限</label>
+              <label for="insp-budget" class="text-[12.5px] text-[#666666]">单品预算上限</label>
               <div class="relative flex items-center">
-                <span class="absolute left-3 font-mono text-[13px] text-warmgray">¥</span>
+                <span class="absolute left-3 font-mono text-[13px] text-[#666666]">¥</span>
                 <input
+                  id="insp-budget"
                   v-model.number="inspirationState.budget"
                   type="number"
                   min="50"
                   max="2000"
                   step="10"
-                  class="w-28 pl-7 pr-3 py-1.5 rounded-xl bg-oat-50 border border-oat-300 font-mono text-[13.5px] font-semibold text-charcoal outline-none focus:border-charcoal"
+                  class="w-28 pl-7 pr-3 py-1.5 rounded-xl bg-[#FAFAFA] border border-black/[0.08] font-mono text-[13.5px] font-semibold text-black outline-none focus:border-black"
                 />
               </div>
             </div>
             <button
               @click="runInspirationAnalysis"
               :disabled="inspirationState.isAnalyzing"
-              class="px-5 py-2.5 rounded-full bg-charcoal hover:bg-charcoal-hover text-white text-[13.5px] font-medium shadow-sm transition flex items-center gap-2"
+              class="px-5 py-2.5 rounded-full bg-black hover:bg-black/85 disabled:bg-black/15 disabled:text-black/40 text-white text-[13.5px] font-medium transition flex items-center gap-2"
             >
               <AppIcon name="sparkles" :size="15" />
-              {{ inspirationState.isAnalyzing ? '正在拆解并检索衣橱...' : '拆解灵感并检索' }}
+              {{ inspirationState.isAnalyzing ? '正在拆解…' : '拆解并检索' }}
             </button>
           </div>
         </div>
 
-        <div class="bg-white rounded-3xl border border-oat-300 shadow-editorial p-6">
+        <div class="bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6">
           <div class="mb-4">
-            <h3 class="font-serif text-[17px] font-semibold text-charcoal">多模态拆解与衣橱比对结果</h3>
-            <p class="text-[12px] text-warmgray mt-0.5">
+            <h3 class="text-[16px] font-semibold text-black">拆解与衣橱比对</h3>
+            <p class="text-[12px] text-[#666666] mt-0.5">
               {{ inspirationState.notice || `已识别 ${inspirationState.items.length} 件单品 · 仅检索 @${authStore.user?.username} 的个人衣橱` }}
             </p>
           </div>
 
-          <div class="space-y-3.5">
+          <div class="space-y-3">
             <div
               v-for="(item, idx) in inspirationState.items"
               :key="item.name + idx"
@@ -935,47 +1257,45 @@ function sleep(ms: number) {
               class="p-4 rounded-2xl border transition cursor-pointer"
               :class="
                 inspirationState.activeHotspot === idx
-                  ? 'bg-oat-50 border-terracotta/70 shadow-sm'
-                  : 'bg-white border-oat-200 hover:border-oat-400'
+                  ? 'bg-[#FAFAFA] border-black'
+                  : 'bg-white border-black/[0.08] hover:border-black/30'
               "
             >
               <div class="flex items-center gap-3">
-                <div class="w-12 h-12 rounded-xl bg-oat-100 border border-oat-200 p-1.5 shrink-0">
+                <div class="w-12 h-12 rounded-xl bg-[#F5F5F5] p-1.5 shrink-0">
                   <GarmentSvg :type="item.svgType" :color="item.colorHex" class="w-full h-full" />
                 </div>
-                <div>
+                <div class="min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-mono text-[11px] text-warmgray">0{{ idx + 1 }} {{ item.slotLabel }}</span>
-                    <h4 class="font-medium text-[14px] text-charcoal">{{ item.name }}</h4>
+                    <span class="font-mono text-[11px] text-[#666666]">0{{ idx + 1 }} {{ item.slotLabel }}</span>
+                    <h4 class="font-medium text-[14px] text-black">{{ item.name }}</h4>
                   </div>
                   <div v-if="item.matchedWardrobe" class="mt-1 flex items-center gap-2 text-[12px] flex-wrap">
-                    <span
-                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium text-[11px]"
-                    >
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#F5F5F5] text-black font-medium text-[11px]">
                       <AppIcon name="check" :size="11" />
-                      衣橱已有 · {{ item.similarity }}% 相似
+                      衣橱已有 · <span class="font-mono">{{ item.similarity }}%</span> 相似
                     </span>
-                    <span class="text-warmgray">
-                      可直接复用「<strong class="text-charcoal font-medium">{{ item.matchedWardrobe.name }}</strong>」
+                    <span class="text-[#666666]">
+                      可直接复用「<strong class="text-black font-medium">{{ item.matchedWardrobe.name }}</strong>」
                     </span>
                   </div>
-                  <div v-else class="mt-1 flex items-center gap-2 text-[12px]">
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-terracotta-light text-terracotta-dark font-medium text-[11px]">
+                  <div v-else class="mt-1 flex items-center gap-2 text-[12px] flex-wrap">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full border border-black text-black font-medium text-[11px]">
                       衣橱缺失 · 建议补全
                     </span>
-                    <span class="text-warmgray">为您匹配到预算内相似平替</span>
+                    <span class="text-[#666666]">已匹配预算内相似平替</span>
                   </div>
                 </div>
               </div>
 
-              <div v-if="!item.matchedWardrobe" class="mt-3 pt-3 border-t border-oat-200">
+              <div v-if="!item.matchedWardrobe" class="mt-3 pt-3 border-t border-black/[0.06]">
                 <div v-if="item.products?.length" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div
                     v-for="prod in item.products"
                     :key="prod.id"
-                    class="p-2.5 rounded-xl bg-white border border-oat-300/80 flex items-center gap-3 hover:border-terracotta transition"
+                    class="p-2.5 rounded-xl bg-white border border-black/[0.08] flex items-center gap-3 hover:border-black/30 transition"
                   >
-                    <div class="w-11 h-11 rounded-lg bg-oat-100 p-1 shrink-0">
+                    <div class="w-11 h-11 rounded-lg bg-[#F5F5F5] p-1 shrink-0">
                       <GarmentVisual :image-url="prod.imageUrl" :svg-type="prod.svgType" :color-hex="prod.colorHex" :alt="prod.title" />
                     </div>
                     <div class="min-w-0 flex-1">
@@ -983,13 +1303,13 @@ function sleep(ms: number) {
                         <span class="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0" :class="platformBadgeClass(prod.platform)">
                           {{ prod.platformLabel }}
                         </span>
-                        <span class="text-[12px] font-medium text-charcoal truncate">{{ prod.title }}</span>
+                        <span class="text-[12px] font-medium text-black truncate">{{ prod.title }}</span>
                       </div>
                       <div class="flex items-center justify-between mt-1">
-                        <span class="font-mono font-semibold text-[13px] text-terracotta">¥{{ prod.price }}</span>
+                        <span class="font-mono font-semibold text-[13px] text-black">¥{{ prod.price }}</span>
                         <button
                           @click.stop="wardrobeStore.activeProductModal = prod"
-                          class="text-[11px] font-medium text-charcoal hover:text-terracotta underline"
+                          class="text-[11px] font-medium text-black underline underline-offset-4"
                         >
                           去看看 ↗
                         </button>
@@ -997,7 +1317,7 @@ function sleep(ms: number) {
                     </div>
                   </div>
                 </div>
-                <div v-else class="text-[12px] text-warmgray py-1">
+                <div v-else class="text-[12px] text-[#666666] py-1">
                   当前预算 ¥{{ inspirationState.budget }} 以内暂无完全匹配商品。
                 </div>
               </div>

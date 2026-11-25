@@ -3,7 +3,9 @@ import { TOKEN_KEY } from '@/api/http';
 
 const router = createRouter({
   history: createWebHistory(),
-  scrollBehavior() {
+  scrollBehavior(to, from) {
+    // 同页切换 query（如 /profile?tab=...）不回顶，保持当前滚动位置
+    if (to.path === from.path) return false;
     return { top: 0, behavior: 'smooth' };
   },
   routes: [
@@ -39,7 +41,7 @@ const router = createRouter({
           path: 'profile',
           name: 'profile',
           component: () => import('@/views/ProfileView.vue'),
-          meta: { title: '我的与偏好', dockIndex: 3 },
+          meta: { title: '我的', dockIndex: 3 },
         },
         {
           path: 'lookbook',
@@ -51,7 +53,7 @@ const router = createRouter({
           path: 'scan',
           name: 'scan',
           component: () => import('@/views/VisionStudioView.vue'),
-          meta: { title: 'AI 识别与街拍拆解', dockIndex: 1 },
+          meta: { title: 'AI 识别', dockIndex: 1 },
         },
         {
           path: 'calendar',

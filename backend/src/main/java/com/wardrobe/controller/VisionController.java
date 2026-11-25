@@ -24,6 +24,22 @@ public class VisionController {
         return Result.ok(visionService.recognizeItem(UserContextHolder.getUserId(), file, cutoutFile, sourceType));
     }
 
+    /** One photo in, N garments out (each with a normalized bounding box) for multi-item wardrobe ingestion. */
+    @PostMapping("/detect-items")
+    public Result<VisionDto.ItemsDetectionVo> detectItems(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "sourceType", defaultValue = "photo") String sourceType) {
+        return Result.ok(visionService.detectItems(UserContextHolder.getUserId(), file, sourceType));
+    }
+
+    /** Persists one client-side crop (+ optional browser cutout) of a detected garment. */
+    @PostMapping("/store-item-image")
+    public Result<VisionDto.StoredItemImageVo> storeItemImage(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "cutoutFile", required = false) MultipartFile cutoutFile) {
+        return Result.ok(visionService.storeItemImage(UserContextHolder.getUserId(), file, cutoutFile));
+    }
+
     @PostMapping("/analyze-inspiration")
     public Result<VisionDto.InspirationAnalyzeVo> analyzeInspiration(
             @RequestParam(value = "file", required = false) MultipartFile file,
