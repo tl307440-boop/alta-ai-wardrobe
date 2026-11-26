@@ -211,6 +211,75 @@ public class MultimodalLlmClient {
     }
 
     /**
+     * Visual Contact-Sheet outfit curation: sends the numbered 1024x1024 garment grid alongside
+     * structured wardrobe metadata so the VLM visually evaluates fabrics, prints, proportions, and colors.
+     */
+    public JsonNode curateOutfitPlanWithContactSheet(AiConfigService.ResolvedAiCredentials creds,
+                                                     String stylistUserPrompt,
+                                                     String contactSheetDataUri) {
+        String systemPrompt = """
+                你是高级杂志风私人多模态 AI 造型师。你将同时收到一张用户真实衣橱单品的【视觉联络表 Contact Sheet（每张图左上角标注 #1..#N 与下方 ID）】以及文字元数据。
+                请务必**先看图审视每件衣服的真实版型、材质肌理、印花图案与色彩深浅**，再结合天气、场景、身形与个人喜好挑出最和谐的全身搭配，仅返回合法 JSON，禁止输出 Markdown 围栏或多余说明：
+                {
+                  "themeTitle": "温柔通勤 · 轻松出门",
+                  "selectedItemIds": [2, 4, 7, 9],
+                  "missingItems": [
+                    {
+                      "category": "outerwear",
+                      "name": "米色短款双排扣风衣",
+                      "color": "燕麦",
+                      "colorHex": "#DFD3C3",
+                      "keywords": "米色 短款 风衣 通勤",
+                      "reason": "当前微凉天气建议外搭短款风衣提升层次与腰线"
+                    }
+                  ],
+                  "aiReasoning": "结合画面中观察到的真实面料/版型/色彩深浅，具体说明搭配理由与比例亮点（70~120字中文）",
+                  "matchScore": 96.0
+                }
+                硬性规则：
+                1. selectedItemIds 只能从候选衣橱的真实数字 id 中挑选，每个品类（outerwear/top/bottom/shoes/accessory）最多选 1 件；
+                2. 严禁同时选择连衣裙与独立上下装，严禁印花打架或面料季节冲突；
+                3. 若衣橱已有合适外套则 missingItems 可为空数组 []。
+                """;
+        return callVisionForJson(creds, systemPrompt, stylistUserPrompt, contactSheetDataUri);
+    }
+
+    /**
+     * Visual AI Outfit Critique ("AI 搭配体检"): evaluates either a flat-lay collage canvas or a real mirror OOTD photo.
+     */
+    public JsonNode critiqueOutfitVisual(AiConfigService.ResolvedAiCredentials creds,
+                                         String imageDataUri,
+                                         String critiqueUserPrompt) {
+        String systemPrompt = """
+                你是专业且真诚的私人时尚造型顾问，正在为用户做「AI 搭配体检」。请仔细看图（可能是平铺拼贴方案，也可能是真人对镜 OOTD 实拍），结合用户身形、四季色彩、场景与天气，给出客观具体的视觉点评与 1 条可执行改进建议。仅返回合法 JSON，禁止输出 Markdown 围栏：
+                {
+                  "overallScore": 88,
+                  "colorScore": 91,
+                  "proportionScore": 85,
+                  "sceneScore": 89,
+                  "headline": "一句话精准总评（15~28字，不空洞吹捧）",
+                  "highlights": [
+                    "视觉亮点 1（具体到色彩/材质/层次）",
+                    "视觉亮点 2"
+                  ],
+                  "improvements": [
+                    "可立刻落地的改进建议 1（如塞衣角、挽袖口、调整鞋包呼应或替换单品）"
+                  ],
+                  "suggestedSwap": {
+                    "itemId": 6,
+                    "itemName": "卡其高腰百褶半身裙",
+                    "category": "bottom",
+                    "reason": "用你衣橱里这件替换后，腰线更清晰且与上衣色温更统一"
+                  }
+                }
+                规则：
+                - 各项分数范围 55~99，必须有真实区分度，不要全部给 95+；
+                - suggestedSwap.itemId 必须严格来自提示词给出的【用户衣橱可替换候选列表】中的真实数字 id；若无需替换或列表为空，可将 suggestedSwap 设为 null。
+                """;
+        return callVisionForJson(creds, systemPrompt, critiqueUserPrompt, imageDataUri);
+    }
+
+    /**
      * Generates an editorial try-on preview via OpenAI-compatible relay endpoints.
      * Optimized to avoid reverse-proxy/CDN idle timeouts (e.g. 15s HTTP 524) using:
      * 1. Automatic reference image downscaling + JPEG compression (smaller upload & fewer vision tokens).

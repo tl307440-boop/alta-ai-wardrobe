@@ -11,6 +11,7 @@ import type {
   ItemDetailResponse,
   ItemRecognitionResult,
   ItemsDetectionResult,
+  OutfitCritiqueResult,
   StoredItemImage,
   OutfitPlanVo,
   PreferenceAnalytics,
@@ -206,6 +207,30 @@ export const outfitApi = {
   }) => unwrap<HistoryRecord>(http.post('/outfit/history', payload)),
   updateHistory: (id: number, payload: { feedbackScore?: number; notes?: string }) =>
     unwrap<HistoryRecord>(http.put(`/outfit/history/${id}`, payload)),
+  uploadHistoryPhoto: (id: number, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return unwrap<HistoryRecord>(
+      http.post(`/outfit/history/${id}/photo`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    );
+  },
+  deleteHistoryPhoto: (id: number) =>
+    unwrap<HistoryRecord>(http.delete(`/outfit/history/${id}/photo`)),
+  checkinOotd: (formData: FormData) =>
+    unwrap<HistoryRecord>(
+      http.post('/outfit/history/ootd-checkin', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    ),
+  critique: (formData: FormData) =>
+    unwrap<OutfitCritiqueResult>(
+      http.post('/outfit/critique', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 60000,
+      })
+    ),
 };
 
 export const productApi = {

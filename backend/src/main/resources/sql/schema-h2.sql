@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS `outfit_history` (
   `weather_icon` VARCHAR(30) DEFAULT 'cloud-sun',
   `item_ids` TEXT NOT NULL,
   `ai_reasoning` TEXT DEFAULT NULL,
+  `ootd_photo_url` VARCHAR(500) DEFAULT NULL,
   `feedback_score` TINYINT DEFAULT 5,
   `notes` VARCHAR(300) DEFAULT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -144,6 +145,7 @@ ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `model_reference_url` VARC
 ALTER TABLE `user_preference` ADD COLUMN IF NOT EXISTS `body_shape` VARCHAR(40) DEFAULT 'H型直筒';
 ALTER TABLE `user_preference` ADD COLUMN IF NOT EXISTS `color_season` VARCHAR(40) DEFAULT '中性百搭';
 ALTER TABLE `user_preference` ADD COLUMN IF NOT EXISTS `height_cm` INT DEFAULT 165;
+ALTER TABLE `outfit_history` ADD COLUMN IF NOT EXISTS `ootd_photo_url` VARCHAR(500) DEFAULT NULL;
 
 CREATE TABLE IF NOT EXISTS `inspo_like` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,

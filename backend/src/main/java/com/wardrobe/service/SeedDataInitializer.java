@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -28,14 +29,32 @@ public class SeedDataInitializer implements ApplicationRunner {
     private final MockProductMapper mockProductMapper;
     private final PasswordUtil passwordUtil;
     private final JsonUtils jsonUtils;
+    private final JdbcTemplate jdbcTemplate;
 
     @Override
     public void run(ApplicationArguments args) {
+        ensureSchemaMigrations();
         seedProductsIfEmpty();
         upgradeLegacyDemoProductUrls();
         seedDemoUserIfMissing();
         backfillDemoItemPrices();
         upgradeLegacySvgAssetsToAltaCutouts();
+    }
+
+    /**
+     * Idempotent startup column guard for existing MySQL 8.0 / H2 volumes created before new columns existed.
+     */
+    private void ensureSchemaMigrations() {
+        try {
+            jdbcTemplate.query("SELECT ootd_photo_url FROM outfit_history WHERE 1 = 0", rs -> null);
+        } catch (Exception missingCol) {
+            try {
+                jdbcTemplate.execute("ALTER TABLE outfit_history ADD COLUMN ootd_photo_url VARCHAR(500) DEFAULT NULL");
+                log.info("Applied idempotent schema migration: added outfit_history.ootd_photo_url");
+            } catch (Exception e) {
+                log.debug("Skipped outfit_history.ootd_photo_url migration: {}", e.getMessage());
+            }
+        }
     }
 
     /**

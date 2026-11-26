@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { wardrobeApi } from '@/api/modules';
+import { wardrobeApi, visionApi } from '@/api/modules';
 import { useWardrobeStore } from '@/stores/wardrobe';
 import { useLookbookStore } from '@/stores/lookbook';
 import { useToastStore } from '@/stores/toast';
@@ -9,6 +9,7 @@ import { COLOR_SWATCHES } from '@/utils/constants';
 import type { HistoryRecord } from '@/types';
 import AppIcon from './AppIcon.vue';
 import GarmentVisual from './GarmentVisual.vue';
+import CutoutMaskEditorModal from './CutoutMaskEditorModal.vue';
 
 const router = useRouter();
 const wardrobeStore = useWardrobeStore();
@@ -28,6 +29,35 @@ const newTag = ref('');
 const deleteConfirm = ref(false);
 const saving = ref(false);
 const relatedHistory = ref<HistoryRecord[]>([]);
+const maskEditorOpen = ref(false);
+const savingCutout = ref(false);
+
+const canEditMask = computed(() => {
+  const url = form.processedImageUrl || '';
+  return Boolean(url) && !url.startsWith('svg://');
+});
+
+async function handleMaskApply(payload: { file: File; dataUrl: string }) {
+  const item = wardrobeStore.drawerItem;
+  if (!item || savingCutout.value) return;
+  savingCutout.value = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', payload.file);
+    fd.append('cutoutFile', payload.file);
+    const stored = await visionApi.storeItemImage(fd);
+    await wardrobeStore.updateItem(item.id, {
+      processedImageUrl: stored.processedImageUrl,
+    });
+    form.processedImageUrl = stored.processedImageUrl;
+    maskEditorOpen.value = false;
+    toast.show('手动精修后的透明抠图已更新保存');
+  } catch (e: any) {
+    toast.show(e?.message || '精修图片保存失败');
+  } finally {
+    savingCutout.value = false;
+  }
+}
 
 watch(
   () => wardrobeStore.drawerItem,
@@ -162,6 +192,15 @@ function jumpToCalendar(date: string) {
               :color-hex="form.colorHex"
               :alt="form.name"
             />
+            <button
+              v-if="canEditMask"
+              type="button"
+              @click="maskEditorOpen = true"
+              class="absolute top-3 right-3 px-3 py-1 rounded-full bg-white/95 hover:bg-black hover:text-white border border-black/15 text-[11.5px] font-medium text-black shadow-sm transition flex items-center gap-1"
+            >
+              <AppIcon name="wand" :size="12" />
+              精修抠图
+            </button>
             <span class="absolute bottom-3 right-3 px-2.5 py-1 rounded-full bg-white/95 border border-black/[0.08] font-mono text-[11px] text-black">
               累计穿着 {{ wardrobeStore.drawerItem.wearCount }} 次
             </span>
@@ -337,4 +376,13 @@ function jumpToCalendar(date: string) {
       </div>
     </div>
   </transition>
+
+  <CutoutMaskEditorModal
+    :open="maskEditorOpen"
+    :title="form.name"
+    :original-url="wardrobeStore.drawerItem?.originalImageUrl || form.processedImageUrl"
+    :cutout-url="form.processedImageUrl"
+    @close="maskEditorOpen = false"
+    @apply="handleMaskApply"
+  />
 </template>

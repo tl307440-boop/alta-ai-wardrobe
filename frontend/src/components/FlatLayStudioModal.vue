@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { CollageNode, OutfitPlanVo, PlanSlot, WardrobeItem } from '@/types';
+import type { CollageNode, OutfitCritiqueResult, OutfitPlanVo, PlanSlot, WardrobeItem } from '@/types';
+import { outfitApi } from '@/api/modules';
 import { useWardrobeStore } from '@/stores/wardrobe';
 import { useToastStore } from '@/stores/toast';
 import { categoryLabel } from '@/utils/constants';
@@ -59,6 +60,9 @@ const backdropId = ref<'dot' | 'white' | 'oat' | 'stone' | 'noir'>('dot');
 const transparentExport = ref(false);
 const customStampInput = ref('');
 const exporting = ref(false);
+const critiquing = ref(false);
+const critiqueOpen = ref(false);
+const critiqueResult = ref<OutfitCritiqueResult | null>(null);
 const hasUnsavedChanges = ref(false);
 const spacePressed = ref(false);
 
@@ -831,6 +835,153 @@ function onKeyUp(e: KeyboardEvent) {
 }
 
 /**
+ * Shared bounding-box renderer used by both 2x Retina PNG export and AI Outfit Critique snapshot.
+ */
+async function renderStudioCanvas(opts: {
+  scale: number;
+  includeFooter: boolean;
+  transparent: boolean;
+}): Promise<{ canvas: HTMLCanvasElement; width: number; height: number } | null> {
+  if (!viewportRef.value) return null;
+  let minWX = Infinity;
+  let maxWX = -Infinity;
+  let minWY = Infinity;
+  let maxWY = -Infinity;
+
+  if (guideFrameBox.value) {
+    minWX = -guideFrameBox.value.w / 2;
+    maxWX = guideFrameBox.value.w / 2;
+    minWY = -guideFrameBox.value.h / 2;
+    maxWY = guideFrameBox.value.h / 2;
+  } else {
+    for (const n of nodes.value) {
+      const { wx, wy } = nodeToWorldPx(n);
+      const half = n.labelText ? 110 * n.scale : (GARMENT_BASE_PX * n.scale) / 2 + 24;
+      minWX = Math.min(minWX, wx - half);
+      maxWX = Math.max(maxWX, wx + half);
+      minWY = Math.min(minWY, wy - half);
+      maxWY = Math.max(maxWY, wy + half);
+    }
+    const pad = 72;
+    minWX -= pad;
+    maxWX += pad;
+    minWY -= pad;
+    maxWY += pad;
+  }
+
+  const stageW = Math.max(640, Math.round((maxWX - minWX) * opts.scale));
+  const stageH = Math.max(520, Math.round((maxWY - minWY) * opts.scale));
+  const footerH = opts.includeFooter && !opts.transparent ? 140 : 0;
+  const outW = stageW;
+  const outH = stageH + footerH;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 不可用');
+
+  const bd = activeBackdrop.value;
+  if (!opts.transparent) {
+    ctx.fillStyle = bd.bg;
+    ctx.fillRect(0, 0, outW, outH);
+    if (bd.dot) {
+      ctx.fillStyle = 'rgba(0,0,0,0.08)';
+      for (let gx = 32; gx < outW - 20; gx += 28) {
+        for (let gy = 32; gy < stageH - 16; gy += 28) {
+          ctx.beginPath();
+          ctx.arc(gx, gy, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  const ordered = [...nodes.value].sort((a, b) => a.zIndex - b.zIndex);
+  for (const node of ordered) {
+    const { wx, wy } = nodeToWorldPx(node);
+    const cx = (wx - minWX) * opts.scale;
+    const cy = (wy - minWY) * opts.scale;
+
+    if (node.labelText) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((node.rotation * Math.PI) / 180);
+      ctx.scale(node.flipX ? -node.scale : node.scale, node.scale);
+      ctx.font = '600 28px Inter, "Noto Sans SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = bd.dark && !opts.transparent ? '#FFFFFF' : '#000000';
+      ctx.fillText(node.labelText, 0, 0);
+      ctx.restore();
+      continue;
+    }
+
+    const domEl = viewportRef.value.querySelector(`[data-studio-node="${CSS.escape(node.nodeKey)}"]`);
+    if (!domEl) continue;
+
+    let imgEl: HTMLImageElement | null = null;
+    const rawImg = domEl.querySelector('img') as HTMLImageElement | null;
+    const rawSvg = domEl.querySelector('svg') as SVGSVGElement | null;
+    if (rawImg && rawImg.src) {
+      imgEl = await loadImageSafe(rawImg.src);
+    } else if (rawSvg) {
+      const cloned = rawSvg.cloneNode(true) as SVGSVGElement;
+      cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      if (!cloned.getAttribute('width')) cloned.setAttribute('width', '320');
+      if (!cloned.getAttribute('height')) cloned.setAttribute('height', '320');
+      const svgStr = new XMLSerializer().serializeToString(cloned);
+      imgEl = await loadImageSafe('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr));
+    }
+
+    if (imgEl) {
+      const baseBox = GARMENT_BASE_PX * opts.scale * node.scale;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((node.rotation * Math.PI) / 180);
+      if (node.flipX) ctx.scale(-1, 1);
+      const ratio = imgEl.naturalWidth && imgEl.naturalHeight ? imgEl.naturalWidth / imgEl.naturalHeight : 1;
+      const drawW = ratio >= 1 ? baseBox : baseBox * ratio;
+      const drawH = ratio >= 1 ? baseBox / ratio : baseBox;
+      ctx.shadowColor = bd.dark && !opts.transparent ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.09)';
+      ctx.shadowBlur = 18;
+      ctx.shadowOffsetY = 8;
+      ctx.drawImage(imgEl, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+    }
+  }
+
+  if (opts.includeFooter && !opts.transparent) {
+    ctx.strokeStyle = bd.dark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(48, stageH + 14);
+    ctx.lineTo(outW - 48, stageH + 14);
+    ctx.stroke();
+
+    ctx.fillStyle = bd.dark ? '#FFFFFF' : '#000000';
+    ctx.font = '600 28px Inter, "Noto Sans SC", sans-serif';
+    ctx.fillText(props.plan.themeTitle || 'ALTA · 智搭衣橱 OOTD', 48, stageH + 62);
+
+    ctx.fillStyle = bd.dark ? 'rgba(255,255,255,0.65)' : '#666666';
+    ctx.font = '400 18px Inter, "Noto Sans SC", sans-serif';
+    const summary = nodes.value
+      .filter((n) => !n.labelText)
+      .map((n) => resolveNodeVisual(n).name)
+      .slice(0, 6)
+      .join(' · ');
+    ctx.fillText(summary, 48, stageH + 98);
+
+    ctx.fillStyle = bd.dark ? '#FFFFFF' : '#000000';
+    ctx.font = '500 16px "JetBrains Mono", monospace';
+    const today = new Date().toISOString().slice(0, 10);
+    ctx.fillText(`ALTA INFINITE STUDIO · ${today} · MATCH ${props.plan.matchScore}%`, outW - 500, stageH + 62);
+  }
+
+  return { canvas, width: outW, height: outH };
+}
+
+/**
  * Excalidraw / tldraw Bounding-Box Smart Export:
  * Exports either the active guide frame OR the tight bounding box of all items across
  * the infinite canvas at 2x Retina resolution, with optional transparent background!
@@ -839,152 +990,67 @@ async function exportStudioPng() {
   if (!viewportRef.value || exporting.value) return;
   exporting.value = true;
   try {
-    let minWX = Infinity;
-    let maxWX = -Infinity;
-    let minWY = Infinity;
-    let maxWY = -Infinity;
-
-    if (guideFrameBox.value) {
-      minWX = -guideFrameBox.value.w / 2;
-      maxWX = guideFrameBox.value.w / 2;
-      minWY = -guideFrameBox.value.h / 2;
-      maxWY = guideFrameBox.value.h / 2;
-    } else {
-      for (const n of nodes.value) {
-        const { wx, wy } = nodeToWorldPx(n);
-        const half = n.labelText ? 110 * n.scale : (GARMENT_BASE_PX * n.scale) / 2 + 24;
-        minWX = Math.min(minWX, wx - half);
-        maxWX = Math.max(maxWX, wx + half);
-        minWY = Math.min(minWY, wy - half);
-        maxWY = Math.max(maxWY, wy + half);
-      }
-      const pad = 72;
-      minWX -= pad;
-      maxWX += pad;
-      minWY -= pad;
-      maxWY += pad;
-    }
-
-    const scale2x = 1.6;
-    const stageW = Math.max(960, Math.round((maxWX - minWX) * scale2x));
-    const stageH = Math.max(760, Math.round((maxWY - minWY) * scale2x));
-    const footerH = transparentExport.value ? 0 : 140;
-    const outW = stageW;
-    const outH = stageH + footerH;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = outW;
-    canvas.height = outH;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas 不可用');
-
-    const bd = activeBackdrop.value;
-    if (!transparentExport.value) {
-      ctx.fillStyle = bd.bg;
-      ctx.fillRect(0, 0, outW, outH);
-      if (bd.dot) {
-        ctx.fillStyle = 'rgba(0,0,0,0.08)';
-        for (let gx = 32; gx < outW - 20; gx += 28) {
-          for (let gy = 32; gy < stageH - 16; gy += 28) {
-            ctx.beginPath();
-            ctx.arc(gx, gy, 1.2, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-      }
-    }
-
-    const ordered = [...nodes.value].sort((a, b) => a.zIndex - b.zIndex);
-    for (const node of ordered) {
-      const { wx, wy } = nodeToWorldPx(node);
-      const cx = (wx - minWX) * scale2x;
-      const cy = (wy - minWY) * scale2x;
-
-      if (node.labelText) {
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate((node.rotation * Math.PI) / 180);
-        ctx.scale(node.flipX ? -node.scale : node.scale, node.scale);
-        ctx.font = '600 28px Inter, "Noto Sans SC", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = bd.dark && !transparentExport.value ? '#FFFFFF' : '#000000';
-        ctx.fillText(node.labelText, 0, 0);
-        ctx.restore();
-        continue;
-      }
-
-      const domEl = viewportRef.value.querySelector(`[data-studio-node="${CSS.escape(node.nodeKey)}"]`);
-      if (!domEl) continue;
-
-      let imgEl: HTMLImageElement | null = null;
-      const rawImg = domEl.querySelector('img') as HTMLImageElement | null;
-      const rawSvg = domEl.querySelector('svg') as SVGSVGElement | null;
-      if (rawImg && rawImg.src) {
-        imgEl = await loadImageSafe(rawImg.src);
-      } else if (rawSvg) {
-        const cloned = rawSvg.cloneNode(true) as SVGSVGElement;
-        cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-        if (!cloned.getAttribute('width')) cloned.setAttribute('width', '320');
-        if (!cloned.getAttribute('height')) cloned.setAttribute('height', '320');
-        const svgStr = new XMLSerializer().serializeToString(cloned);
-        imgEl = await loadImageSafe('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr));
-      }
-
-      if (imgEl) {
-        const baseBox = GARMENT_BASE_PX * scale2x * node.scale;
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate((node.rotation * Math.PI) / 180);
-        if (node.flipX) ctx.scale(-1, 1);
-        const ratio = imgEl.naturalWidth && imgEl.naturalHeight ? imgEl.naturalWidth / imgEl.naturalHeight : 1;
-        const drawW = ratio >= 1 ? baseBox : baseBox * ratio;
-        const drawH = ratio >= 1 ? baseBox / ratio : baseBox;
-        ctx.shadowColor = bd.dark && !transparentExport.value ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.09)';
-        ctx.shadowBlur = 18;
-        ctx.shadowOffsetY = 8;
-        ctx.drawImage(imgEl, -drawW / 2, -drawH / 2, drawW, drawH);
-        ctx.restore();
-      }
-    }
-
-    if (!transparentExport.value) {
-      ctx.strokeStyle = bd.dark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(48, stageH + 14);
-      ctx.lineTo(outW - 48, stageH + 14);
-      ctx.stroke();
-
-      ctx.fillStyle = bd.dark ? '#FFFFFF' : '#000000';
-      ctx.font = '600 28px Inter, "Noto Sans SC", sans-serif';
-      ctx.fillText(props.plan.themeTitle || 'ALTA · 智搭衣橱 OOTD', 48, stageH + 62);
-
-      ctx.fillStyle = bd.dark ? 'rgba(255,255,255,0.65)' : '#666666';
-      ctx.font = '400 18px Inter, "Noto Sans SC", sans-serif';
-      const summary = nodes.value
-        .filter((n) => !n.labelText)
-        .map((n) => resolveNodeVisual(n).name)
-        .slice(0, 6)
-        .join(' · ');
-      ctx.fillText(summary, 48, stageH + 98);
-
-      ctx.fillStyle = bd.dark ? '#FFFFFF' : '#000000';
-      ctx.font = '500 16px "JetBrains Mono", monospace';
-      const today = new Date().toISOString().slice(0, 10);
-      ctx.fillText(`ALTA INFINITE STUDIO · ${today} · MATCH ${props.plan.matchScore}%`, outW - 500, stageH + 62);
-    }
-
+    const rendered = await renderStudioCanvas({
+      scale: 1.6,
+      includeFooter: true,
+      transparent: transparentExport.value,
+    });
+    if (!rendered) return;
     const a = document.createElement('a');
-    a.href = canvas.toDataURL('image/png');
+    a.href = rendered.canvas.toDataURL('image/png');
     a.download = `alta-studio-${props.plan.id}${transparentExport.value ? '-transparent' : ''}.png`;
     a.click();
-    toast.show(`已导出 ${outW}×${outH} 高清拼贴图`);
+    toast.show(`已导出 ${rendered.width}×${rendered.height} 高清拼贴图`);
   } catch (e: any) {
     toast.show(e.message || '导出失败');
   } finally {
     exporting.value = false;
   }
+}
+
+async function runOutfitCritique() {
+  if (!viewportRef.value || critiquing.value) return;
+  critiquing.value = true;
+  layersOpen.value = false;
+  critiqueOpen.value = true;
+  try {
+    const rendered = await renderStudioCanvas({
+      scale: 0.85,
+      includeFooter: false,
+      transparent: false,
+    });
+    if (!rendered) throw new Error('画布渲染失败');
+    const blob = await new Promise<Blob | null>((resolve) =>
+      rendered.canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.86)
+    );
+    if (!blob) throw new Error('画布快照导出失败');
+
+    const fd = new FormData();
+    fd.append('file', new File([blob], `studio-plan-${props.plan.id}.jpg`, { type: 'image/jpeg' }));
+    if (props.plan.sceneTag) fd.append('sceneTag', props.plan.sceneTag);
+    if (props.plan.weatherSnapshot) {
+      fd.append('weatherInfo', `${props.plan.weatherSnapshot.condition} ${props.plan.weatherSnapshot.temp}℃`);
+    }
+    const ids = Array.from(new Set(nodes.value.filter((n) => n.itemId > 0).map((n) => n.itemId)));
+    if (ids.length) fd.append('itemIds', JSON.stringify(ids));
+    fd.append('source', 'studio_canvas');
+
+    critiqueResult.value = await outfitApi.critique(fd);
+  } catch (e: any) {
+    toast.show(e.message || 'AI 搭配体检失败');
+    if (!critiqueResult.value) critiqueOpen.value = false;
+  } finally {
+    critiquing.value = false;
+  }
+}
+
+function applySuggestedSwapToCanvas(itemId: number) {
+  const item = wardrobeStore.items.find((i) => i.id === itemId);
+  if (!item) {
+    toast.show('未在衣橱中找到该单品');
+    return;
+  }
+  addWardrobePiece(item);
 }
 
 function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
@@ -1262,11 +1328,27 @@ const infiniteGridStyle = computed(() => {
           </div>
         </div>
 
-        <!-- Top-Right Capsule: Layer Toggle + Save + Export -->
+        <!-- Top-Right Capsule: AI Critique + Layer Toggle + Save + Export -->
         <div class="pointer-events-auto inline-flex items-center gap-1.5 px-2 py-1.5 rounded-full bg-white/92 backdrop-blur-xl border border-black/[0.08] shadow-[0_8px_28px_rgba(0,0,0,0.08)]">
           <button
             type="button"
-            @click="layersOpen = !layersOpen"
+            @click="runOutfitCritique"
+            :disabled="critiquing"
+            title="让 AI 看图给当前画布搭配打分与改进建议"
+            class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-medium transition border"
+            :class="
+              critiqueOpen
+                ? 'bg-black text-white border-black'
+                : 'bg-[#FAFAFA] hover:bg-black hover:text-white text-black border-black/15'
+            "
+          >
+            <AppIcon name="sparkles" :size="13" />
+            {{ critiquing ? '体检中...' : 'AI 搭配体检' }}
+          </button>
+
+          <button
+            type="button"
+            @click="layersOpen = !layersOpen; if (layersOpen) critiqueOpen = false"
             class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-medium transition"
             :class="layersOpen ? 'bg-black text-white' : 'hover:bg-[#F2F2F2] text-black'"
           >
@@ -1548,6 +1630,143 @@ const infiniteGridStyle = computed(() => {
               </button>
             </div>
           </div>
+        </div>
+      </aside>
+
+      <!-- 4b. FLOATING RIGHT AI OUTFIT CRITIQUE DRAWER -->
+      <aside
+        v-if="critiqueOpen"
+        class="fixed top-16 right-4 bottom-16 w-80 max-w-[calc(100vw-2rem)] rounded-3xl bg-white/96 backdrop-blur-xl border border-black/[0.08] shadow-[0_18px_48px_rgba(0,0,0,0.12)] flex flex-col z-30 overflow-hidden"
+      >
+        <div class="p-4 border-b border-black/[0.06] flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1.5">
+            <AppIcon name="sparkles" :size="14" class="text-black" />
+            <span class="text-[13px] font-semibold text-black">AI 搭配体检报告</span>
+          </div>
+          <button
+            type="button"
+            @click="critiqueOpen = false"
+            class="w-7 h-7 rounded-full hover:bg-[#F2F2F2] flex items-center justify-center text-[#555555] hover:text-black transition"
+          >
+            <AppIcon name="x" :size="14" />
+          </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+          <div v-if="critiquing" class="py-12 text-center space-y-3">
+            <div class="w-9 h-9 mx-auto rounded-full border-2 border-black border-t-transparent animate-spin" />
+            <p class="text-[12.5px] font-medium text-black">正在审视当前画布色彩、比例与层次…</p>
+            <p class="text-[11px] text-[#666666]">同步结合你的身形、季型与衣橱余量给出建议</p>
+          </div>
+
+          <template v-else-if="critiqueResult">
+            <div class="flex items-end justify-between gap-3 pb-3 border-b border-black/[0.06]">
+              <div>
+                <span class="text-[10.5px] font-mono uppercase tracking-wider text-[#666666]">OVERALL SCORE</span>
+                <div class="flex items-baseline gap-1 mt-0.5">
+                  <span class="font-mono text-3xl font-semibold text-black leading-none">{{ critiqueResult.overallScore }}</span>
+                  <span class="font-mono text-[12px] text-[#666666]">/ 100</span>
+                </div>
+              </div>
+              <span
+                class="px-2.5 py-1 rounded-full text-[10.5px] font-mono"
+                :class="critiqueResult.usedRealVlm ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#555555] border border-black/[0.08]'"
+              >
+                {{ critiqueResult.usedRealVlm ? 'VLM 看图点评' : '衣橱规则体检' }}
+              </span>
+            </div>
+
+            <p class="text-[13.5px] font-medium text-black leading-snug">
+              “{{ critiqueResult.headline }}”
+            </p>
+
+            <!-- 3 Dimension Bars -->
+            <div class="space-y-2.5">
+              <div
+                v-for="bar in [
+                  { label: '色彩和谐', score: critiqueResult.colorScore },
+                  { label: '廓形比例', score: critiqueResult.proportionScore },
+                  { label: '场合契合', score: critiqueResult.sceneScore },
+                ]"
+                :key="bar.label"
+                class="space-y-1"
+              >
+                <div class="flex items-center justify-between text-[11.5px]">
+                  <span class="text-[#555555]">{{ bar.label }}</span>
+                  <span class="font-mono font-semibold text-black">{{ bar.score }}</span>
+                </div>
+                <div class="h-1.5 rounded-full bg-[#F2F2F2] overflow-hidden">
+                  <div class="h-full rounded-full bg-black transition-all duration-500" :style="{ width: `${bar.score}%` }" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Highlights -->
+            <div class="space-y-1.5">
+              <div class="text-[11px] font-mono uppercase tracking-wider text-[#666666]">亮点</div>
+              <ul class="space-y-1.5">
+                <li
+                  v-for="(h, idx) in critiqueResult.highlights"
+                  :key="idx"
+                  class="flex items-start gap-2 text-[12px] text-[#222222] leading-relaxed"
+                >
+                  <AppIcon name="check" :size="13" class="mt-0.5 shrink-0 text-black" />
+                  <span>{{ h }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- Improvements -->
+            <div class="space-y-1.5">
+              <div class="text-[11px] font-mono uppercase tracking-wider text-[#666666]">优化建议</div>
+              <ul class="space-y-1.5">
+                <li
+                  v-for="(imp, idx) in critiqueResult.improvements"
+                  :key="idx"
+                  class="p-2.5 rounded-xl bg-[#FAFAFA] border border-black/[0.06] text-[12px] text-[#222222] leading-relaxed"
+                >
+                  {{ imp }}
+                </li>
+              </ul>
+            </div>
+
+            <!-- Suggested Closet Swap -->
+            <div
+              v-if="critiqueResult.suggestedSwap"
+              class="p-3 rounded-2xl border border-black/15 bg-[#FAFAFA] space-y-2"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[10.5px] font-mono text-[#666666]">衣橱推荐试搭</span>
+                <span class="text-[10.5px] px-2 py-0.5 rounded-full bg-white border border-black/10 text-black">
+                  {{ categoryLabel(critiqueResult.suggestedSwap.category) }}
+                </span>
+              </div>
+              <div class="text-[13px] font-semibold text-black">{{ critiqueResult.suggestedSwap.itemName }}</div>
+              <p class="text-[11.5px] text-[#555555] leading-relaxed">{{ critiqueResult.suggestedSwap.reason }}</p>
+              <button
+                type="button"
+                @click="applySuggestedSwapToCanvas(critiqueResult.suggestedSwap.itemId)"
+                class="w-full py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition"
+              >
+                + 放入画布试搭
+              </button>
+            </div>
+
+            <p v-if="critiqueResult.notice" class="text-[11px] text-[#777777] leading-relaxed">
+              {{ critiqueResult.notice }}
+            </p>
+          </template>
+        </div>
+
+        <div class="p-3 border-t border-black/[0.06]">
+          <button
+            type="button"
+            @click="runOutfitCritique"
+            :disabled="critiquing"
+            class="w-full py-2 rounded-full border border-black text-black hover:bg-black hover:text-white text-[12px] font-medium transition disabled:opacity-50"
+          >
+            {{ critiquing ? '重新分析中...' : '调整画布后重新体检' }}
+          </button>
         </div>
       </aside>
 

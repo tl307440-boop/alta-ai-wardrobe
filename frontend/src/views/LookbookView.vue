@@ -404,7 +404,15 @@ async function handleRecordToday() {
                 综合匹配度 {{ lookbookStore.currentPlan.matchScore }}%
               </span>
               <span
-                v-if="lookbookStore.currentPlan.usedRealLlm"
+                v-if="lookbookStore.currentPlan.usedVisualReview"
+                title="已将真实衣橱视觉联络表交给多模态模型看图选衣"
+                class="px-2 py-0.5 rounded-full bg-black text-white text-[10.5px] font-mono inline-flex items-center gap-1"
+              >
+                <AppIcon name="sparkles" :size="10" />
+                VLM 视觉审图
+              </span>
+              <span
+                v-else-if="lookbookStore.currentPlan.usedRealLlm"
                 class="px-2 py-0.5 rounded-full bg-[#F5F5F5] text-black border border-black/[0.08] text-[10.5px] font-mono"
               >
                 LLM 精排

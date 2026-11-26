@@ -17,6 +17,7 @@ backend/uploads/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/public/ort/
 
 # Personal local reference images & thesis documents in workspace root
 微信图片_*.png

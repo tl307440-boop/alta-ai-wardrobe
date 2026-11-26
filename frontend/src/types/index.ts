@@ -251,7 +251,29 @@ export interface OutfitPlanVo {
   tryOnImageUrl?: string | null;
   favorite: boolean;
   usedRealLlm: boolean;
+  usedVisualReview?: boolean;
   createdAt?: string;
+}
+
+export interface SuggestedSwap {
+  itemId: number;
+  itemName: string;
+  category: string;
+  reason: string;
+}
+
+export interface OutfitCritiqueResult {
+  overallScore: number;
+  colorScore: number;
+  proportionScore: number;
+  sceneScore: number;
+  headline: string;
+  highlights: string[];
+  improvements: string[];
+  suggestedSwap?: SuggestedSwap | null;
+  usedRealVlm: boolean;
+  modelUsed?: string;
+  notice?: string;
 }
 
 export interface HistoryRecord {
@@ -267,6 +289,7 @@ export interface HistoryRecord {
   items: WardrobeItem[];
   palette: string[];
   aiReasoning: string;
+  ootdPhotoUrl?: string | null;
   feedbackScore: number;
   notes: string;
 }

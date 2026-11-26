@@ -135,10 +135,23 @@ public class WardrobeService {
             item.setPrice(req.getPrice().setScale(2, RoundingMode.HALF_UP));
         }
         if (req.getRemark() != null) item.setRemark(req.getRemark());
+        if (req.getProcessedImageUrl() != null && isSafeItemImageUrl(userId, req.getProcessedImageUrl())) {
+            item.setProcessedImageUrl(req.getProcessedImageUrl().trim());
+        }
+        if (req.getOriginalImageUrl() != null && isSafeItemImageUrl(userId, req.getOriginalImageUrl())) {
+            item.setOriginalImageUrl(req.getOriginalImageUrl().trim());
+        }
         item.setIsManuallyCorrected(1);
         item.setUpdatedAt(LocalDateTime.now());
         wardrobeItemMapper.updateById(item);
         return toVo(item);
+    }
+
+    private boolean isSafeItemImageUrl(Long userId, String url) {
+        String trimmed = url.trim();
+        return trimmed.startsWith("/uploads/user_" + userId + "/")
+                || trimmed.startsWith("/alta/")
+                || trimmed.startsWith("svg://");
     }
 
     public void deleteItem(Long userId, Long itemId) {

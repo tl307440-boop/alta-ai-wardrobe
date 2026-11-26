@@ -425,6 +425,29 @@ export const useLookbookStore = defineStore('lookbook', () => {
     return updated;
   }
 
+  async function uploadHistoryPhoto(id: number, file: File) {
+    const updated = await outfitApi.uploadHistoryPhoto(id, file);
+    const idx = history.value.findIndex((h) => h.id === id);
+    if (idx > -1) history.value[idx] = updated;
+    return updated;
+  }
+
+  async function deleteHistoryPhoto(id: number) {
+    const updated = await outfitApi.deleteHistoryPhoto(id);
+    const idx = history.value.findIndex((h) => h.id === id);
+    if (idx > -1) history.value[idx] = updated;
+    return updated;
+  }
+
+  async function checkinOotd(formData: FormData) {
+    const wardrobeStore = useWardrobeStore();
+    const rec = await outfitApi.checkinOotd(formData);
+    history.value = await outfitApi.listHistory();
+    selectedCalendarDate.value = rec.wearDate;
+    await wardrobeStore.refreshItems();
+    return rec;
+  }
+
   function loadPlan(plan: OutfitPlanVo) {
     rememberPlan(JSON.parse(JSON.stringify(plan)));
     selectedTryOnJobId.value = null;
@@ -475,6 +498,9 @@ export const useLookbookStore = defineStore('lookbook', () => {
     dislikePlan,
     recordToday,
     updateHistoryRecord,
+    uploadHistoryPhoto,
+    deleteHistoryPhoto,
+    checkinOotd,
     loadPlan,
     reset,
   };
