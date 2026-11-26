@@ -39,7 +39,7 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     serverDefaultAvailable: false,
     vtonEnabled: false,
     vtonProvider: 'dashscope',
-    vtonModel: 'aitryon-plus',
+    vtonModel: 'qwen-image-2.1-pro',
     hasVtonApiKey: false,
     vtonApiKeyMasked: '',
     vtonKeyReusesMain: false,

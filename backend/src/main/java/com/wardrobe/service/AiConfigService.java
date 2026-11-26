@@ -67,7 +67,7 @@ public class AiConfigService {
                     .serverDefaultAvailable(serverDefaultAvailable)
                     .vtonEnabled(false)
                     .vtonProvider("dashscope")
-                    .vtonModel("aitryon-plus")
+                    .vtonModel(com.wardrobe.service.client.DashScopeVtonClient.DEFAULT_MODEL)
                     .hasVtonApiKey(false)
                     .vtonApiKeyMasked("")
                     .vtonKeyReusesMain(defaultIsDashScope && serverDefaultAvailable)
@@ -81,7 +81,7 @@ public class AiConfigService {
         boolean vtonEnabled = entity.getVtonEnabled() != null && entity.getVtonEnabled() == 1;
         String vtonProvider = (entity.getVtonProvider() != null && !entity.getVtonProvider().isBlank())
                 ? entity.getVtonProvider() : "dashscope";
-        String vtonModel = "aitryon".equalsIgnoreCase(entity.getVtonModel()) ? "aitryon" : "aitryon-plus";
+        String vtonModel = normalizeVtonModel(entity.getVtonModel());
         boolean hasVtonKey = entity.getVtonApiKeyEncrypted() != null && !entity.getVtonApiKeyEncrypted().isBlank();
         boolean mainEnabled = entity.getEnabled() == null || entity.getEnabled() == 1;
         boolean mainIsDashScope = isDashScopeMain(entity.getProviderName(), entity.getBaseUrl());
@@ -148,9 +148,11 @@ public class AiConfigService {
             entity.setVtonProvider("dashscope");
         }
         if (req.getVtonModel() != null && !req.getVtonModel().isBlank()) {
-            entity.setVtonModel("aitryon".equalsIgnoreCase(req.getVtonModel().trim()) ? "aitryon" : "aitryon-plus");
+            entity.setVtonModel(normalizeVtonModel(req.getVtonModel()));
         } else if (isNew || entity.getVtonModel() == null || entity.getVtonModel().isBlank()) {
-            entity.setVtonModel("aitryon-plus");
+            entity.setVtonModel(com.wardrobe.service.client.DashScopeVtonClient.DEFAULT_MODEL);
+        } else {
+            entity.setVtonModel(normalizeVtonModel(entity.getVtonModel()));
         }
         if (Boolean.TRUE.equals(req.getClearVtonApiKey())) {
             entity.setVtonApiKeyEncrypted(null);
@@ -189,7 +191,7 @@ public class AiConfigService {
             entity.setEnabled(1);
             entity.setVtonEnabled(0);
             entity.setVtonProvider("dashscope");
-            entity.setVtonModel("aitryon-plus");
+            entity.setVtonModel(com.wardrobe.service.client.DashScopeVtonClient.DEFAULT_MODEL);
         }
         entity.setModelReferenceUrl(modelReferenceUrl);
         entity.setUpdatedAt(LocalDateTime.now());
@@ -234,7 +236,7 @@ public class AiConfigService {
             boolean vtonEnabled = entity.getVtonEnabled() != null && entity.getVtonEnabled() == 1;
             String vtonProvider = (entity.getVtonProvider() != null && !entity.getVtonProvider().isBlank())
                     ? entity.getVtonProvider() : "dashscope";
-            String vtonModel = "aitryon".equalsIgnoreCase(entity.getVtonModel()) ? "aitryon" : "aitryon-plus";
+            String vtonModel = normalizeVtonModel(entity.getVtonModel());
             String vtonPub = trimTrailingSlash(entity.getVtonPublicBaseUrl());
 
             String vtonDecrypted = cryptoService.decrypt(entity.getVtonApiKeyEncrypted());
@@ -277,7 +279,7 @@ public class AiConfigService {
                     true,
                     false,
                     "dashscope",
-                    "aitryon-plus",
+                    com.wardrobe.service.client.DashScopeVtonClient.DEFAULT_MODEL,
                     null,
                     null,
                     false
@@ -293,7 +295,7 @@ public class AiConfigService {
                 false,
                 false,
                 "dashscope",
-                "aitryon-plus",
+                com.wardrobe.service.client.DashScopeVtonClient.DEFAULT_MODEL,
                 null,
                 null,
                 false
@@ -305,6 +307,10 @@ public class AiConfigService {
             return true;
         }
         return baseUrl != null && baseUrl.toLowerCase().contains("dashscope.aliyuncs.com");
+    }
+
+    public static String normalizeVtonModel(String raw) {
+        return com.wardrobe.service.client.DashScopeVtonClient.normalizeModel(raw);
     }
 
     private String trimTrailingSlash(String url) {

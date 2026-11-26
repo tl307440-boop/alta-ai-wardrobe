@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS `user_ai_config` (
   `model_reference_url` VARCHAR(500) DEFAULT NULL COMMENT '用户本人/模特参考图URL',
   `vton_enabled` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用专业虚拟试衣(VTON)通道',
   `vton_provider` VARCHAR(50) DEFAULT 'dashscope' COMMENT 'VTON服务商：dashscope',
-  `vton_model` VARCHAR(100) DEFAULT 'aitryon-plus' COMMENT 'VTON试衣模型名：aitryon-plus/aitryon',
+  `vton_model` VARCHAR(100) DEFAULT 'qwen-image-2.1-pro' COMMENT 'VTON多图试衣模型名：qwen-image-2.1-pro/turbo/3.0-pro/wan2.7-image-pro',
   `vton_api_key_encrypted` TEXT DEFAULT NULL COMMENT 'VTON专用加密API Key',
   `vton_api_key_masked` VARCHAR(100) DEFAULT NULL COMMENT 'VTON专用脱敏API Key',
   `vton_public_base_url` VARCHAR(500) DEFAULT NULL COMMENT '供百炼拉取图片的公网基地址',

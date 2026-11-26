@@ -1278,7 +1278,7 @@ public class OutfitRecommendationService {
                 : buildFallbackOverallPalette(allSlots);
         String bodyProfileZh = heightCm + "cm · " + bodyShape + " · " + colorSeason;
 
-        // 3.5 Plan C Primary Path: Alibaba Bailian Professional Virtual Try-On (aitryon / aitryon-plus)
+        // 3.5 Plan C Primary Path: Alibaba Bailian Active Multi-Image Virtual Try-On (Base64 direct pass, works on localhost & prod)
         String vtonFallbackReason = null;
         String requestedPreset = req != null && req.getModelPreset() != null ? req.getModelPreset().trim() : "";
         if (creds.vtonActive()) {
@@ -1287,113 +1287,149 @@ public class OutfitRecommendationService {
                     configuredPublicBaseUrl,
                     req != null ? req.getClientOrigin() : null
             );
-            if (StorageService.isLoopbackUrl(effectivePublicBase)) {
-                vtonFallbackReason = "当前服务地址为本地回环或未配置公网 URL，阿里云百炼无法从公网拉取图片，请在「AI 模型配置」填写服务器公网地址（如 http://你的IP:8680）；已自动回退至通用生图通道";
-            } else {
-                try {
-                    String personAssetUrl;
-                    if (requestedPreset.startsWith("/alta/models/")) {
-                        personAssetUrl = requestedPreset;
-                    } else if (wantRef && creds.modelReferenceUrl() != null && !creds.modelReferenceUrl().isBlank()) {
-                        personAssetUrl = creds.modelReferenceUrl();
-                    } else {
-                        personAssetUrl = "/alta/models/female-1.jpg";
-                    }
-
-                    OutfitDto.PlanSlotVo onePieceSlot = allSlots.stream()
-                            .filter(this::isOnePieceGarment)
-                            .findFirst()
-                            .orElse(null);
-                    OutfitDto.PlanSlotVo topSlot;
-                    OutfitDto.PlanSlotVo bottomSlot;
-                    if (onePieceSlot != null) {
-                        topSlot = onePieceSlot;
-                        bottomSlot = null;
-                    } else {
-                        OutfitDto.PlanSlotVo outerwearSlot = findSlotByKey(allSlots, "outerwear");
-                        OutfitDto.PlanSlotVo topOnlySlot = findSlotByKey(allSlots, "top");
-                        OutfitDto.PlanSlotVo bottomOnlySlot = findSlotByKey(allSlots, "bottom");
-                        String upperPref = req != null && req.getUpperGarmentPreference() != null
-                                ? req.getUpperGarmentPreference().trim().toLowerCase(Locale.ROOT)
-                                : "auto";
-                        if ("top".equals(upperPref)) {
-                            topSlot = topOnlySlot != null ? topOnlySlot : outerwearSlot;
-                        } else {
-                            topSlot = outerwearSlot != null ? outerwearSlot : topOnlySlot;
-                        }
-                        bottomSlot = bottomOnlySlot;
-                    }
-
-                    String personPublicUrl = storageService.preparePublicVtonImageUrl(userId, personAssetUrl, effectivePublicBase);
-                    String topAssetUrl = resolveSlotAssetUrl(topSlot, wardrobeById);
-                    String bottomAssetUrl = resolveSlotAssetUrl(bottomSlot, wardrobeById);
-                    String topPublicUrl = topAssetUrl != null
-                            ? storageService.preparePublicVtonImageUrl(userId, topAssetUrl, effectivePublicBase)
-                            : null;
-                    String bottomPublicUrl = bottomAssetUrl != null
-                            ? storageService.preparePublicVtonImageUrl(userId, bottomAssetUrl, effectivePublicBase)
-                            : null;
-
-                    if (personPublicUrl == null || (topPublicUrl == null && bottomPublicUrl == null)) {
-                        vtonFallbackReason = "当前搭配缺少可送入百炼 VTON 的上装/下装单品图片或模特全身照，已自动回退至通用生图通道";
-                    } else {
-                        DashScopeVtonClient.VtonResult vtonRes = dashScopeVtonClient.runVirtualTryOn(
-                                creds.vtonApiKey(),
-                                creds.vtonModel(),
-                                personPublicUrl,
-                                topPublicUrl,
-                                bottomPublicUrl
-                        );
-                        StorageService.StoredImage saved = storageService.storeGeneratedImageBytes(
-                                userId, vtonRes.imageBytes(), "tryon_vton");
-                        plan.setTryOnImageUrl(saved.url());
-                        outfitPlanMapper.updateById(plan);
-
-                        String appliedTopKey = (topPublicUrl != null && topSlot != null) ? topSlot.getSlotKey() : null;
-                        String appliedBottomKey = (bottomPublicUrl != null && bottomSlot != null) ? bottomSlot.getSlotKey() : null;
-                        List<String> appliedLabels = new ArrayList<>();
-                        int appliedCount = 0;
-                        for (OutfitDto.VisualPieceFeatureVo pf : pieceFeatures) {
-                            boolean applied = Objects.equals(pf.getSlotKey(), appliedTopKey)
-                                    || Objects.equals(pf.getSlotKey(), appliedBottomKey);
-                            pf.setVtonApplied(applied);
-                            if (applied) {
-                                appliedCount++;
-                                appliedLabels.add(pf.getSlotLabel());
-                            }
-                        }
-
-                        OutfitDto.TryOnVisualReportVo vtonReport = OutfitDto.TryOnVisualReportVo.builder()
-                                .usedRealVlm(usedVlmVisualExtraction)
-                                .referencedGarmentCount(appliedCount)
-                                .usedGarmentImagesInGen(true)
-                                .engineType("dashscope_vton")
-                                .vtonFallbackReason(null)
-                                .overallPalette(overallPaletteZh)
-                                .bodyProfile(bodyProfileZh)
-                                .sceneLabel("阿里云百炼 VTON 棚拍实穿")
-                                .pieces(pieceFeatures)
-                                .build();
-
-                        String appliedSummary = appliedLabels.isEmpty() ? "上/下装" : String.join("、", appliedLabels);
-                        return OutfitDto.TryOnResultVo.builder()
-                                .planId(planId)
-                                .previewImageUrl(saved.url())
-                                .usedRealImageModel(true)
-                                .usedReferencePhoto(true)
-                                .modelUsed(vtonRes.modelUsed())
-                                .endpointUsed("dashscope/aitryon")
-                                .promptUsed("")
-                                .visualReport(vtonReport)
-                                .notice("已通过阿里云百炼专业试衣（" + vtonRes.modelUsed() + "）完成 1:1 实穿贴合（实穿：" + appliedSummary + "），效果图已永久保存至本地")
-                                .build();
-                    }
-                } catch (Exception ex) {
-                    log.warn("DashScope VTON try-on failed ({}), falling back to general image generation", ex.getMessage());
-                    String err = Objects.toString(ex.getMessage(), "未知错误");
-                    if (err.length() > 120) err = err.substring(0, 120) + "...";
-                    vtonFallbackReason = "百炼 VTON 调用异常（" + err + "），已自动回退至通用生图通道";
+            try {
+                String personAssetUrl;
+                if (requestedPreset.startsWith("/alta/models/")) {
+                    personAssetUrl = requestedPreset;
+                } else if (wantRef && creds.modelReferenceUrl() != null && !creds.modelReferenceUrl().isBlank()) {
+                    personAssetUrl = creds.modelReferenceUrl();
+                } else {
+                    personAssetUrl = "/alta/models/female-1.jpg";
                 }
+
+                String personDataUri = storageService.prepareVtonBase64DataUri(userId, personAssetUrl, effectivePublicBase);
+
+                // Select ordered clothing slots up to model capacity (3.0-pro: 2 garments, 2.1/wan2.7: up to 5 garments)
+                List<OutfitDto.PlanSlotVo> orderedCandidates = new ArrayList<>();
+                OutfitDto.PlanSlotVo onePieceSlot = allSlots.stream()
+                        .filter(this::isOnePieceGarment)
+                        .findFirst()
+                        .orElse(null);
+                OutfitDto.PlanSlotVo outerwearSlot = findSlotByKey(allSlots, "outerwear");
+                OutfitDto.PlanSlotVo topOnlySlot = findSlotByKey(allSlots, "top");
+                OutfitDto.PlanSlotVo bottomOnlySlot = findSlotByKey(allSlots, "bottom");
+                OutfitDto.PlanSlotVo shoesSlot = findSlotByKey(allSlots, "shoes");
+                OutfitDto.PlanSlotVo accessorySlot = findSlotByKey(allSlots, "accessory");
+
+                String upperPref = req != null && req.getUpperGarmentPreference() != null
+                        ? req.getUpperGarmentPreference().trim().toLowerCase(Locale.ROOT)
+                        : "auto";
+
+                if (onePieceSlot != null) {
+                    orderedCandidates.add(onePieceSlot);
+                    if (outerwearSlot != null && !Objects.equals(outerwearSlot.getSlotKey(), onePieceSlot.getSlotKey())) {
+                        orderedCandidates.add(outerwearSlot);
+                    }
+                } else if ("top".equals(upperPref)) {
+                    if (topOnlySlot != null) orderedCandidates.add(topOnlySlot);
+                    if (outerwearSlot != null) orderedCandidates.add(outerwearSlot);
+                    if (bottomOnlySlot != null) orderedCandidates.add(bottomOnlySlot);
+                } else {
+                    if (outerwearSlot != null) orderedCandidates.add(outerwearSlot);
+                    if (topOnlySlot != null) orderedCandidates.add(topOnlySlot);
+                    if (bottomOnlySlot != null) orderedCandidates.add(bottomOnlySlot);
+                }
+                if (shoesSlot != null) orderedCandidates.add(shoesSlot);
+                if (accessorySlot != null) orderedCandidates.add(accessorySlot);
+
+                int maxGarments = DashScopeVtonClient.maxGarmentsForModel(creds.vtonModel());
+                Map<String, OutfitDto.VisualPieceFeatureVo> featureBySlot = new LinkedHashMap<>();
+                for (OutfitDto.VisualPieceFeatureVo pf : pieceFeatures) {
+                    featureBySlot.putIfAbsent(pf.getSlotKey(), pf);
+                }
+
+                List<DashScopeVtonClient.GarmentImageInput> garmentInputs = new ArrayList<>();
+                Set<String> appliedSlotKeys = new LinkedHashSet<>();
+                StringBuilder vtonPrompt = new StringBuilder();
+                vtonPrompt.append("高定时尚全套虚拟试穿合成。请以[图1]中的人物作为试穿模特，严格保持[图1]模特的面部五官、发型、肤色、头身比例与自然站姿不变，全身从头到脚完整入镜。\n");
+
+                for (OutfitDto.PlanSlotVo candidate : orderedCandidates) {
+                    if (garmentInputs.size() >= maxGarments) {
+                        break;
+                    }
+                    if (candidate == null || !appliedSlotKeys.add(candidate.getSlotKey())) {
+                        continue;
+                    }
+                    String assetUrl = resolveSlotAssetUrl(candidate, wardrobeById);
+                    String garmentDataUri = assetUrl != null
+                            ? storageService.prepareVtonBase64DataUri(userId, assetUrl, effectivePublicBase)
+                            : null;
+                    if (garmentDataUri == null) {
+                        appliedSlotKeys.remove(candidate.getSlotKey());
+                        continue;
+                    }
+                    int imgIdx = garmentInputs.size() + 2;
+                    OutfitDto.VisualPieceFeatureVo pf = featureBySlot.get(candidate.getSlotKey());
+                    String itemName = candidate.getItem() != null ? Objects.toString(candidate.getItem().getName(), candidate.getSlotLabel()) : candidate.getSlotLabel();
+                    String zhDesc = pf != null && pf.getZhSummary() != null ? pf.getZhSummary() : buildFallbackZhSummary(candidate);
+                    garmentInputs.add(new DashScopeVtonClient.GarmentImageInput(candidate.getSlotLabel(), itemName, garmentDataUri));
+                    vtonPrompt.append("- [图").append(imgIdx).append("] 为本套搭配的").append(candidate.getSlotLabel())
+                            .append("「").append(itemName).append("」（").append(zhDesc)
+                            .append("）：请严格 1:1 还原[图").append(imgIdx).append("]的剪裁轮廓、色彩深浅、领口/袖口细节与面料质感，真实自然地穿在[图1]模特对应部位上。\n");
+                }
+
+                if (personDataUri == null || garmentInputs.isEmpty()) {
+                    vtonFallbackReason = "当前搭配缺少可送入百炼多图试穿的服装参考图或模特全身照，已自动回退至通用生图通道";
+                } else {
+                    vtonPrompt.append("拍摄场景与光影风格：").append(sceneLabelZh).append("（").append(sceneDesc).append("）。\n");
+                    if (!customPrompt.isBlank()) {
+                        vtonPrompt.append("用户附加微调要求：").append(customPrompt).append("。\n");
+                    }
+                    vtonPrompt.append("要求成图光影与衣褶物理贴合真实人体，不要擅自改动原单品的颜色、图案与版型，无文字、无拼贴框、无水印。");
+
+                    DashScopeVtonClient.VtonResult vtonRes = dashScopeVtonClient.runMultiImageTryOn(
+                            creds.vtonApiKey(),
+                            creds.vtonModel(),
+                            personDataUri,
+                            garmentInputs,
+                            vtonPrompt.toString()
+                    );
+                    StorageService.StoredImage saved = storageService.storeGeneratedImageBytes(
+                            userId, vtonRes.imageBytes(), "tryon_vton");
+                    plan.setTryOnImageUrl(saved.url());
+                    outfitPlanMapper.updateById(plan);
+
+                    List<String> appliedLabels = new ArrayList<>();
+                    int appliedCount = 0;
+                    for (OutfitDto.VisualPieceFeatureVo pf : pieceFeatures) {
+                        boolean applied = appliedSlotKeys.contains(pf.getSlotKey());
+                        pf.setVtonApplied(applied);
+                        if (applied) {
+                            appliedCount++;
+                            appliedLabels.add(pf.getSlotLabel());
+                        }
+                    }
+
+                    OutfitDto.TryOnVisualReportVo vtonReport = OutfitDto.TryOnVisualReportVo.builder()
+                            .usedRealVlm(usedVlmVisualExtraction)
+                            .referencedGarmentCount(appliedCount)
+                            .usedGarmentImagesInGen(true)
+                            .engineType("dashscope_vton")
+                            .vtonFallbackReason(null)
+                            .overallPalette(overallPaletteZh)
+                            .bodyProfile(bodyProfileZh)
+                            .sceneLabel(sceneLabelZh + " · 百炼多图实穿")
+                            .pieces(pieceFeatures)
+                            .build();
+
+                    String appliedSummary = appliedLabels.isEmpty() ? "全套单品" : String.join("、", appliedLabels);
+                    return OutfitDto.TryOnResultVo.builder()
+                            .planId(planId)
+                            .previewImageUrl(saved.url())
+                            .usedRealImageModel(true)
+                            .usedReferencePhoto(true)
+                            .modelUsed(vtonRes.modelUsed())
+                            .endpointUsed("dashscope/" + vtonRes.modelUsed())
+                            .promptUsed(vtonPrompt.toString())
+                            .visualReport(vtonReport)
+                            .notice("已通过阿里云百炼多图试穿（" + vtonRes.modelUsed() + "）1:1 融合 " + appliedCount + " 件真实单品（" + appliedSummary + "），效果图已永久保存至本地")
+                            .build();
+                }
+            } catch (Exception ex) {
+                log.warn("DashScope VTON try-on failed ({}), falling back to general image generation", ex.getMessage());
+                String err = Objects.toString(ex.getMessage(), "未知错误");
+                if (err.length() > 120) err = err.substring(0, 120) + "...";
+                vtonFallbackReason = "百炼 VTON 调用异常（" + err + "），已自动回退至通用生图通道";
             }
         }
 

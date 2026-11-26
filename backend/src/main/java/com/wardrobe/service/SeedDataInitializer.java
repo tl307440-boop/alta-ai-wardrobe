@@ -68,7 +68,7 @@ public class SeedDataInitializer implements ApplicationRunner {
         }
         ensureColumn("user_ai_config", "vton_enabled", "TINYINT NOT NULL DEFAULT 0");
         ensureColumn("user_ai_config", "vton_provider", "VARCHAR(50) DEFAULT 'dashscope'");
-        ensureColumn("user_ai_config", "vton_model", "VARCHAR(100) DEFAULT 'aitryon-plus'");
+        ensureColumn("user_ai_config", "vton_model", "VARCHAR(100) DEFAULT 'qwen-image-2.1-pro'");
         ensureColumn("user_ai_config", "vton_api_key_encrypted", "TEXT DEFAULT NULL");
         ensureColumn("user_ai_config", "vton_api_key_masked", "VARCHAR(100) DEFAULT NULL");
         ensureColumn("user_ai_config", "vton_public_base_url", "VARCHAR(500) DEFAULT NULL");
