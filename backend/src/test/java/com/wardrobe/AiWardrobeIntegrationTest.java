@@ -681,4 +681,178 @@ class AiWardrobeIntegrationTest {
         mockMvc.perform(multipart("/api/vision/store-item-image").file(png))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void testVisualContactSheetCritiqueAndOotdPhotoCalendarAndIdorIsolation() throws Exception {
+        String demoToken = loginAsDemo();
+        MockMultipartFile png = new MockMultipartFile("file", "ootd.png", "image/png", VALID_PNG_BYTES);
+        MockMultipartFile fake = new MockMultipartFile("file", "fake.jpg", "image/jpeg", "plain-text-not-img".getBytes());
+
+        // 1. Outfit critique rejects non-image magic bytes (40002)
+        mockMvc.perform(multipart("/api/outfit/critique")
+                        .file(fake)
+                        .param("sceneTag", "职场通勤")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40002));
+
+        // 2. Fetch demo items & run local fallback critique (no API key active)
+        MvcResult itemsRes = mockMvc.perform(get("/api/wardrobe/items")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode itemsArr = objectMapper.readTree(itemsRes.getResponse().getContentAsString()).path("data");
+        long item1 = itemsArr.get(0).path("id").asLong();
+        long item2 = itemsArr.get(1).path("id").asLong();
+
+        mockMvc.perform(multipart("/api/outfit/critique")
+                        .file(png)
+                        .param("sceneTag", "职场通勤")
+                        .param("itemIds", item1 + "," + item2)
+                        .param("source", "studio_canvas")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.overallScore").isNumber())
+                .andExpect(jsonPath("$.data.colorScore").isNumber())
+                .andExpect(jsonPath("$.data.proportionScore").isNumber())
+                .andExpect(jsonPath("$.data.sceneScore").isNumber())
+                .andExpect(jsonPath("$.data.headline").isNotEmpty())
+                .andExpect(jsonPath("$.data.highlights").isArray())
+                .andExpect(jsonPath("$.data.improvements").isArray())
+                .andExpect(jsonPath("$.data.usedRealVlm").value(false));
+
+        // 3. OOTD real-photo check-in on a dedicated date -> persists ootdPhotoUrl & increments wearCount
+        String checkDate = LocalDate.now().minusDays(2).toString();
+        MvcResult checkinRes = mockMvc.perform(multipart("/api/outfit/history/ootd-checkin")
+                        .file(png)
+                        .param("wearDate", checkDate)
+                        .param("themeTitle", "实拍对镜 OOTD")
+                        .param("sceneTag", "周末咖啡")
+                        .param("itemIds", "[" + item1 + "," + item2 + "]")
+                        .param("notes", "阳光很好")
+                        .param("feedbackScore", "5")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ootdPhotoUrl").value(org.hamcrest.Matchers.startsWith("/uploads/user_")))
+                .andExpect(jsonPath("$.data.themeTitle").value("实拍对镜 OOTD"))
+                .andReturn();
+        long historyId = objectMapper.readTree(checkinRes.getResponse().getContentAsString())
+                .path("data").path("id").asLong();
+
+        // 4. Another user cannot overwrite or delete demo's OOTD photo (40301 IDOR protection)
+        String otherUser = "idor_ootd_" + System.currentTimeMillis();
+        MvcResult regRes = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", otherUser,
+                                "password", "TestPass123!",
+                                "nickname", "OtherOotd",
+                                "loadStarterPack", false
+                        ))))
+                .andExpect(status().isOk()).andReturn();
+        String otherToken = objectMapper.readTree(regRes.getResponse().getContentAsString())
+                .path("data").path("token").asText();
+
+        mockMvc.perform(multipart("/api/outfit/history/" + historyId + "/photo")
+                        .file(png)
+                        .header("Authorization", "Bearer " + otherToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(40301));
+
+        mockMvc.perform(delete("/api/outfit/history/" + historyId + "/photo")
+                        .header("Authorization", "Bearer " + otherToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(40301));
+
+        // 5. Owner replaces and deletes OOTD photo cleanly
+        mockMvc.perform(multipart("/api/outfit/history/" + historyId + "/photo")
+                        .file(png)
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ootdPhotoUrl").value(org.hamcrest.Matchers.startsWith("/uploads/user_")));
+
+        mockMvc.perform(delete("/api/outfit/history/" + historyId + "/photo")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ootdPhotoUrl").doesNotExist());
+
+        // 6. Visual Contact Sheet VLM styling + VLM critique with active key (mocked VLM)
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "test",
+                                "baseUrl", "http://127.0.0.1:9/v1",
+                                "apiKey", "sk-test-vlm-contact-sheet-999999",
+                                "visionModel", "gpt-4o",
+                                "chatModel", "gpt-4o-mini",
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk());
+
+        when(llmClient.curateOutfitPlanWithContactSheet(any(), anyString(), anyString()))
+                .thenReturn(objectMapper.readTree("""
+                        {
+                          "themeTitle": "视觉审图 · 极简燕麦通勤",
+                          "selectedItemIds": [%d, %d],
+                          "missingItems": [],
+                          "aiReasoning": "通过视觉联络表确认色温统一、面料质感呼应。",
+                          "matchScore": 96.5
+                        }
+                        """.formatted(item1, item2)));
+
+        mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "daily_weather",
+                                "weatherTemp", 19
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.usedRealLlm").value(true))
+                .andExpect(jsonPath("$.data.usedVisualReview").value(true))
+                .andExpect(jsonPath("$.data.themeTitle").value("视觉审图 · 极简燕麦通勤"));
+
+        when(llmClient.critiqueOutfitVisual(any(), anyString(), anyString()))
+                .thenReturn(objectMapper.readTree("""
+                        {
+                          "overallScore": 90,
+                          "colorScore": 93,
+                          "proportionScore": 87,
+                          "sceneScore": 91,
+                          "headline": "色彩低饱和克制，比例干净利落",
+                          "highlights": ["燕麦与炭黑形成柔和明暗对比"],
+                          "improvements": ["内搭下摆可微塞凸显高腰线"],
+                          "suggestedSwap": {
+                            "itemId": %d,
+                            "itemName": "替换建议",
+                            "category": "accessory",
+                            "reason": "提升整体完整度"
+                          }
+                        }
+                        """.formatted(itemsArr.get(2).path("id").asLong())));
+
+        mockMvc.perform(multipart("/api/outfit/critique")
+                        .file(png)
+                        .param("sceneTag", "职场通勤")
+                        .param("itemIds", item1 + "," + item2)
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.usedRealVlm").value(true))
+                .andExpect(jsonPath("$.data.overallScore").value(90))
+                .andExpect(jsonPath("$.data.suggestedSwap.itemId").value(itemsArr.get(2).path("id").asLong()));
+
+        // Clear mock key so test state stays clean
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "dashscope",
+                                "baseUrl", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                                "clearApiKey", true,
+                                "visionModel", "qwen-vl-max",
+                                "chatModel", "qwen-plus",
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk());
+    }
 }

@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS `outfit_history` (
   `weather_icon` VARCHAR(30) DEFAULT 'cloud-sun' COMMENT '天气图标标识',
   `item_ids` JSON NOT NULL COMMENT '当日实际穿着衣物ID数组',
   `ai_reasoning` TEXT DEFAULT NULL COMMENT '当日AI搭配理由快照',
+  `ootd_photo_url` VARCHAR(500) DEFAULT NULL COMMENT '当日真人OOTD实拍图URL',
   `feedback_score` TINYINT DEFAULT 5 COMMENT '满意度打分：1-5星',
   `notes` VARCHAR(300) DEFAULT NULL COMMENT '个人穿搭心得笔记',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',

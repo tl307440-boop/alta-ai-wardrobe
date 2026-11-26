@@ -54,6 +54,8 @@ public class WardrobeDto {
         private String material;
         private BigDecimal price;
         private String remark;
+        private String processedImageUrl;
+        private String originalImageUrl;
     }
 
     @Data

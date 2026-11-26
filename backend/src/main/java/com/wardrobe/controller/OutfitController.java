@@ -7,9 +7,12 @@ import com.wardrobe.service.CommerceMatchService;
 import com.wardrobe.service.OutfitRecommendationService;
 import com.wardrobe.service.TryOnJobService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 @RestController
@@ -24,6 +27,17 @@ public class OutfitController {
     public Result<OutfitDto.PlanVo> recommend(@RequestBody(required = false) OutfitDto.RecommendRequest req) {
         OutfitDto.RecommendRequest body = req != null ? req : new OutfitDto.RecommendRequest();
         return Result.ok(outfitService.recommend(UserContextHolder.getUserId(), body));
+    }
+
+    @PostMapping("/outfit/critique")
+    public Result<OutfitDto.OutfitCritiqueVo> critiqueOutfit(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) String sceneTag,
+            @RequestParam(required = false) String weatherInfo,
+            @RequestParam(required = false) String itemIds,
+            @RequestParam(defaultValue = "studio_canvas") String source) {
+        return Result.ok(outfitService.critiqueOutfit(
+                UserContextHolder.getUserId(), file, sceneTag, weatherInfo, itemIds, source));
     }
 
     @PostMapping("/outfit/plans/{id}/swap-slot")
@@ -117,6 +131,36 @@ public class OutfitController {
     @PutMapping("/outfit/history/{id}")
     public Result<OutfitDto.HistoryVo> updateHistory(@PathVariable Long id, @RequestBody OutfitDto.UpdateHistoryRequest req) {
         return Result.ok(outfitService.updateHistory(UserContextHolder.getUserId(), id, req));
+    }
+
+    @PostMapping("/outfit/history/{id}/photo")
+    public Result<OutfitDto.HistoryVo> uploadHistoryPhoto(@PathVariable Long id,
+                                                          @RequestParam("file") MultipartFile file) {
+        return Result.ok("当日实拍 OOTD 照片已上传",
+                outfitService.uploadHistoryPhoto(UserContextHolder.getUserId(), id, file));
+    }
+
+    @DeleteMapping("/outfit/history/{id}/photo")
+    public Result<OutfitDto.HistoryVo> deleteHistoryPhoto(@PathVariable Long id) {
+        return Result.ok("已移除当日实拍照片",
+                outfitService.deleteHistoryPhoto(UserContextHolder.getUserId(), id));
+    }
+
+    @PostMapping("/outfit/history/ootd-checkin")
+    public Result<OutfitDto.HistoryVo> checkinOotd(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate wearDate,
+            @RequestParam(required = false) String themeTitle,
+            @RequestParam(required = false) String sceneTag,
+            @RequestParam(required = false) String weatherInfo,
+            @RequestParam(required = false) Integer weatherTemp,
+            @RequestParam(required = false) String weatherIcon,
+            @RequestParam(required = false) String itemIds,
+            @RequestParam(required = false) String notes,
+            @RequestParam(required = false) Integer feedbackScore) {
+        return Result.ok("实拍 OOTD 打卡已写入穿搭日历",
+                outfitService.checkinOotd(UserContextHolder.getUserId(), file, wearDate, themeTitle,
+                        sceneTag, weatherInfo, weatherTemp, weatherIcon, itemIds, notes, feedbackScore));
     }
 
     @GetMapping("/products")

@@ -5,7 +5,13 @@ import { visionApi } from '@/api/modules';
 import { useAuthStore } from '@/stores/auth';
 import { useWardrobeStore } from '@/stores/wardrobe';
 import { useToastStore } from '@/stores/toast';
-import { tryBrowserCutout } from '@/utils/cutout';
+import { tryBrowserCutout, trySmartSingleCutout, type CutoutEngineMode } from '@/utils/cutout';
+import {
+  disposeParsedClothesMap,
+  extractGarmentBySemanticMask,
+  parseClothesSemanticMap,
+  type ParsedClothesMap,
+} from '@/utils/segformer';
 import {
   ALL_STYLE_OPTIONS,
   CATEGORY_OPTIONS,
@@ -19,10 +25,11 @@ import {
   platformBadgeClass,
 } from '@/utils/constants';
 import { cropImageRegion } from '@/utils/crop';
-import type { DetectedItem, InspirationItemMatch } from '@/types';
+import type { BoundingBox, DetectedItem, InspirationItemMatch } from '@/types';
 import AppIcon from '@/components/AppIcon.vue';
 import GarmentSvg from '@/components/GarmentSvg.vue';
 import GarmentVisual from '@/components/GarmentVisual.vue';
+import CutoutMaskEditorModal from '@/components/CutoutMaskEditorModal.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -83,9 +90,12 @@ interface ScanPiece {
   duplicateOf: string | null;
   /** 多件识别：该单品从整图中裁出的实物图（入库时上传），null 表示无位置框 */
   cropFile: File | null;
+  cropDataUrl: string | null;
+  bbox: BoundingBox | null;
   /** 浏览器端抠图结果（可能失败，失败则用裁剪图入库） */
   cutoutFile: File | null;
   cutoutStatus: 'none' | 'pending' | 'running' | 'done' | 'failed';
+  cutoutEngine: 'segformer' | 'general' | 'manual' | 'none';
 }
 
 const SAMPLES: ScanSample[] = [
@@ -121,6 +131,21 @@ const DEFAULT_SVG_BY_CATEGORY: Record<string, string> = {
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
 const savingItem = ref(false);
+const cutoutEngineMode = ref<CutoutEngineMode>('auto');
+
+const CUTOUT_ENGINE_OPTIONS: Array<{ key: CutoutEngineMode; label: string; hint: string }> = [
+  { key: 'auto', label: '自动', hint: '人像多件优先 SegFormer 拆衣，平铺单件走通用抠图' },
+  { key: 'segformer', label: '人像拆衣', hint: '强制使用本地 SegFormer-B2-Clothes 18 类去人像拆衣' },
+  { key: 'general', label: '单品抠图', hint: '强制使用通用前景抠图，适合平铺/挂拍单品' },
+];
+
+const maskEditor = reactive({
+  open: false,
+  targetUid: '' as string,
+  title: '',
+  originalUrl: '',
+  cutoutUrl: '',
+});
 
 const itemScan = reactive({
   sample: null as ScanSample | null,
@@ -158,8 +183,11 @@ function makePiece(partial: Partial<ScanPiece> & Pick<ScanPiece, 'name' | 'categ
     aiRawResult: '',
     duplicateOf: null,
     cropFile: null,
+    cropDataUrl: null,
+    bbox: null,
     cutoutFile: null,
     cutoutStatus: 'none',
+    cutoutEngine: 'none',
     ...partial,
   };
 }
@@ -180,28 +208,164 @@ function settleCutout(uid: string) {
   cutoutWaiters.get(uid)?.resolve();
 }
 
-/** 依次对每件裁剪图做浏览器端抠图：完成一件刷新一件，不阻塞清单展示与编辑 */
-async function runPieceCutouts(runId: number) {
-  const targets = itemScan.pieces.filter((p) => p.cropFile);
-  let first = true;
-  for (const p of targets) {
-    if (runId !== scanRunId) break;
+/**
+ * 双引擎多件抠图：
+ * - auto / segformer：先跑一次全图 SegFormer-B2-Clothes（18 类去人像/皮肤/头发），按每件单品的品类与位置框精准提取像素级透明单品；
+ * - 未命中语义掩码或用户选择 general 时，对裁剪图回退到通用前景抠图 (@imgly/background-removal)。
+ */
+async function runPieceCutouts(runId: number, sourceFile: File | null = selectedFile.value) {
+  const targets = itemScan.pieces.filter((p) => !p.saved && (p.cropFile || p.bbox));
+  if (!targets.length) return;
+
+  let parsedMap: ParsedClothesMap | null = null;
+  const wantSegFormer =
+    sourceFile &&
+    (cutoutEngineMode.value === 'segformer' || cutoutEngineMode.value === 'auto');
+
+  if (wantSegFormer && sourceFile) {
+    targets.forEach((p) => {
+      p.cutoutStatus = 'running';
+    });
+    try {
+      parsedMap = await parseClothesSemanticMap(sourceFile, 45000);
+    } catch {
+      parsedMap = null;
+    }
+  }
+
+  let firstGeneral = true;
+  try {
+    for (const p of targets) {
+      if (runId !== scanRunId) break;
+      p.cutoutStatus = 'running';
+
+      let extractedBySeg = false;
+      if (
+        parsedMap &&
+        (cutoutEngineMode.value === 'segformer' ||
+          (cutoutEngineMode.value === 'auto' && parsedMap.hasHumanWearing))
+      ) {
+        const segRes = await extractGarmentBySemanticMask(parsedMap, {
+          category: p.category,
+          name: p.name,
+          bbox: p.bbox,
+          filePrefix: p.uid,
+        });
+        if (runId !== scanRunId) break;
+        if (segRes) {
+          p.cropFile = segRes.cropFile;
+          p.cropDataUrl = segRes.cropDataUrl;
+          p.cutoutFile = segRes.cutoutFile;
+          if (!p.saved) p.processedImageUrl = segRes.cutoutDataUrl;
+          p.cutoutStatus = 'done';
+          p.cutoutEngine = 'segformer';
+          extractedBySeg = true;
+        }
+      }
+
+      if (!extractedBySeg && p.cropFile) {
+        const res = await tryBrowserCutout(p.cropFile, firstGeneral ? 45000 : 20000);
+        firstGeneral = false;
+        if (runId !== scanRunId) break;
+        if (res.cutoutFile && res.cutoutDataUrl) {
+          p.cutoutFile = res.cutoutFile;
+          if (!p.saved) p.processedImageUrl = res.cutoutDataUrl;
+          p.cutoutStatus = 'done';
+          p.cutoutEngine = 'general';
+        } else {
+          p.cutoutStatus = 'failed';
+          p.cutoutEngine = 'none';
+        }
+      } else if (!extractedBySeg) {
+        p.cutoutStatus = 'failed';
+        p.cutoutEngine = 'none';
+      }
+      settleCutout(p.uid);
+    }
+  } finally {
+    disposeParsedClothesMap(parsedMap);
+    targets.forEach((p) => settleCutout(p.uid));
+  }
+}
+
+async function switchCutoutEngine(mode: CutoutEngineMode) {
+  if (cutoutEngineMode.value === mode) return;
+  cutoutEngineMode.value = mode;
+  if (!selectedFile.value || !itemScan.done || itemScan.isScanning) return;
+  const runId = ++scanRunId;
+  cutoutWaiters.forEach((w) => w.resolve());
+  cutoutWaiters.clear();
+
+  // Multi-item path: re-cut all unsaved pieces with the new engine
+  if (itemScan.pieces.length >= 2) {
+    itemScan.pieces.forEach((p) => {
+      if (!p.saved && (p.cropFile || p.bbox)) {
+        p.cutoutStatus = 'pending';
+        registerCutoutWaiter(p.uid);
+      }
+    });
+    toast.show(`已切换为「${CUTOUT_ENGINE_OPTIONS.find((o) => o.key === mode)?.label}」，正在重新抠图…`);
+    void runPieceCutouts(runId, selectedFile.value);
+    return;
+  }
+
+  // Single-item path: re-cut single garment in place
+  const p = itemScan.pieces[0];
+  if (p && !p.saved) {
     p.cutoutStatus = 'running';
-    // 首次需加载抠图模型，给更长超时；之后模型已缓存
-    const res = await tryBrowserCutout(p.cropFile as File, first ? 45000 : 20000);
-    first = false;
-    if (runId !== scanRunId) break;
+    toast.show(`已切换为「${CUTOUT_ENGINE_OPTIONS.find((o) => o.key === mode)?.label}」，正在重新抠图…`);
+    const res = await trySmartSingleCutout(selectedFile.value, mode, p.category, p.name, 30000);
+    if (runId !== scanRunId) return;
     if (res.cutoutFile && res.cutoutDataUrl) {
+      p.cropFile = selectedFile.value;
+      p.cropDataUrl = itemScan.uploadedOriginalDataUrl;
       p.cutoutFile = res.cutoutFile;
-      if (!p.saved) p.processedImageUrl = res.cutoutDataUrl;
+      p.processedImageUrl = res.cutoutDataUrl;
       p.cutoutStatus = 'done';
+      p.cutoutEngine = res.engineUsed;
+      itemScan.uploadedCutoutDataUrl = res.cutoutDataUrl;
+      itemScan.viewMode = 'cutout';
     } else {
       p.cutoutStatus = 'failed';
+      toast.show('切换引擎抠图未命中，已保留当前预览');
     }
-    settleCutout(p.uid);
   }
-  // 作废的轮次或未处理到的单品也要放行，避免入库时无限等待
-  targets.forEach((p) => settleCutout(p.uid));
+}
+
+function openMaskEditorForPiece(p: ScanPiece) {
+  if (p.saved) return;
+  const orig = p.cropDataUrl || itemScan.uploadedOriginalDataUrl || p.originalImageUrl;
+  const cut = p.processedImageUrl.startsWith('svg://') ? orig : p.processedImageUrl;
+  if (!orig && !cut) {
+    toast.show('当前示例图不支持画笔精修，请上传实物照片');
+    return;
+  }
+  maskEditor.targetUid = p.uid;
+  maskEditor.title = p.name;
+  maskEditor.originalUrl = orig || cut;
+  maskEditor.cutoutUrl = cut || orig;
+  maskEditor.open = true;
+}
+
+function handleMaskEditorApply(payload: { file: File; dataUrl: string }) {
+  const p = itemScan.pieces.find((x) => x.uid === maskEditor.targetUid);
+  if (p) {
+    if (!p.cropFile && selectedFile.value) {
+      p.cropFile = selectedFile.value;
+      p.cropDataUrl = itemScan.uploadedOriginalDataUrl;
+    }
+    p.cutoutFile = payload.file;
+    p.processedImageUrl = payload.dataUrl;
+    p.cutoutStatus = 'done';
+    p.cutoutEngine = 'manual';
+    p.corrected = true;
+    if (itemScan.pieces.length === 1) {
+      itemScan.uploadedCutoutDataUrl = payload.dataUrl;
+      itemScan.viewMode = 'cutout';
+    }
+    toast.show(`已应用「${p.name}」手动精修抠图`);
+  }
+  maskEditor.open = false;
 }
 
 async function waitForPieceCutout(p: ScanPiece) {
@@ -291,6 +455,7 @@ function pieceFromDetected(d: DetectedItem, sourceUrl: string): ScanPiece {
     processedImageUrl: `svg://${svgType}`,
     aiRawResult: d.aiRawResult || '',
     duplicateOf: d.similarWardrobeName ?? null,
+    bbox: d.bbox ?? null,
   });
 }
 
@@ -302,6 +467,7 @@ async function attachCrops(file: File, detected: DetectedItem[], pieces: ScanPie
       try {
         const crop = await cropImageRegion(file, d.bbox, { name: `piece-${i + 1}` });
         pieces[i].cropFile = crop.file;
+        pieces[i].cropDataUrl = crop.dataUrl;
         pieces[i].processedImageUrl = crop.dataUrl;
         pieces[i].cutoutStatus = 'pending';
       } catch {
@@ -348,9 +514,9 @@ async function scanUploadedPhoto(file: File) {
     }
   }
 
-  // 2) 单件识别：浏览器端智能抠图 + 服务端多模态属性解析
+  // 2) 单件识别：按当前引擎（自动 / 人像拆衣 / 单品抠图）浏览器端智能抠图 + 服务端多模态属性解析
   itemScan.currentStep = 1;
-  const cutoutRes = await tryBrowserCutout(file, 16000);
+  const cutoutRes = await trySmartSingleCutout(file, cutoutEngineMode.value, 'top', '', 24000);
   itemScan.uploadedCutoutDataUrl = cutoutRes.cutoutDataUrl;
 
   itemScan.currentStep = 2;
@@ -376,6 +542,9 @@ async function scanUploadedPhoto(file: File) {
       svgType: result.svgType || 'tshirt',
       originalImageUrl: result.originalImageUrl,
       processedImageUrl: result.processedImageUrl,
+      cropDataUrl: itemScan.uploadedOriginalDataUrl,
+      cutoutStatus: cutoutRes.cutoutFile ? 'done' : 'failed',
+      cutoutEngine: cutoutRes.engineUsed,
       aiRawResult: result.aiRawResult || '',
     }),
   ];
@@ -681,25 +850,54 @@ function sleep(ms: number) {
     <div v-if="scanMode === 'item'" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <!-- 左：照片 -->
       <div class="lg:col-span-5 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6 flex flex-col gap-4">
-        <div v-if="itemScan.done && itemScan.uploadedCutoutDataUrl" class="flex items-center justify-end gap-3">
+        <!-- 抠图引擎切换 + 单件原图/抠图切换 -->
+        <div class="flex flex-wrap items-center justify-between gap-2">
           <div
-            class="inline-flex p-0.5 rounded-full bg-[#F5F5F5] text-[12px]"
+            class="inline-flex p-0.5 rounded-full bg-[#F5F5F5] text-[11.5px]"
             role="group"
-            aria-label="预览方式"
+            aria-label="抠图引擎切换"
           >
             <button
-              @click="itemScan.viewMode = 'original'"
-              class="px-3 py-1 rounded-full font-medium transition"
-              :class="itemScan.viewMode === 'original' ? 'bg-black text-white' : 'text-[#666666]'"
+              v-for="eng in CUTOUT_ENGINE_OPTIONS"
+              :key="eng.key"
+              type="button"
+              :title="eng.hint"
+              @click="switchCutoutEngine(eng.key)"
+              class="px-2.5 py-1 rounded-full font-medium transition"
+              :class="cutoutEngineMode === eng.key ? 'bg-black text-white' : 'text-[#666666] hover:text-black'"
             >
-              原图
+              {{ eng.label }}
             </button>
-            <button
-              @click="itemScan.viewMode = 'cutout'"
-              class="px-3 py-1 rounded-full font-medium transition"
-              :class="itemScan.viewMode === 'cutout' ? 'bg-black text-white' : 'text-[#666666]'"
+          </div>
+
+          <div v-if="itemScan.done && itemScan.uploadedCutoutDataUrl" class="flex items-center gap-1.5">
+            <div
+              class="inline-flex p-0.5 rounded-full bg-[#F5F5F5] text-[11.5px]"
+              role="group"
+              aria-label="预览方式"
             >
-              抠图
+              <button
+                @click="itemScan.viewMode = 'original'"
+                class="px-2.5 py-1 rounded-full font-medium transition"
+                :class="itemScan.viewMode === 'original' ? 'bg-black text-white' : 'text-[#666666]'"
+              >
+                原图
+              </button>
+              <button
+                @click="itemScan.viewMode = 'cutout'"
+                class="px-2.5 py-1 rounded-full font-medium transition"
+                :class="itemScan.viewMode === 'cutout' ? 'bg-black text-white' : 'text-[#666666]'"
+              >
+                抠图
+              </button>
+            </div>
+            <button
+              v-if="itemScan.pieces.length === 1 && !itemScan.pieces[0].saved"
+              type="button"
+              @click="openMaskEditorForPiece(itemScan.pieces[0])"
+              class="px-2.5 py-1 rounded-full border border-black/15 hover:border-black text-[11.5px] font-medium text-black transition"
+            >
+              精修
             </button>
           </div>
         </div>
@@ -882,14 +1080,22 @@ function sleep(ms: number) {
               </button>
 
               <div
-                class="w-14 h-14 rounded-xl bg-[#F5F5F5] ring-1 ring-inset ring-black/[0.04] p-1.5 shrink-0"
+                class="relative group w-14 h-14 rounded-xl bg-[#F5F5F5] ring-1 ring-inset ring-black/[0.04] p-1.5 shrink-0"
                 :class="[
                   !p.selected && !p.saved && p.duplicateOf ? 'opacity-50' : '',
                   p.cutoutStatus === 'running' ? 'animate-pulse' : '',
                 ]"
-                :title="p.cutoutStatus === 'running' ? '正在抠图…' : undefined"
+                :title="p.cutoutStatus === 'running' ? '正在抠图…' : '点击可手动画笔精修抠图'"
               >
                 <GarmentVisual :image-url="p.processedImageUrl" :svg-type="p.svgType" :color-hex="p.colorHex" :alt="p.name" />
+                <button
+                  v-if="!p.saved && !p.processedImageUrl.startsWith('svg://')"
+                  type="button"
+                  @click.stop="openMaskEditorForPiece(p)"
+                  class="absolute -bottom-1.5 -right-1.5 px-1.5 py-0.5 rounded-full bg-black text-white text-[9.5px] font-medium shadow-sm opacity-90 hover:opacity-100 transition"
+                >
+                  精修
+                </button>
               </div>
 
               <button
@@ -1326,5 +1532,14 @@ function sleep(ms: number) {
         </div>
       </div>
     </div>
+
+    <CutoutMaskEditorModal
+      :open="maskEditor.open"
+      :title="maskEditor.title"
+      :original-url="maskEditor.originalUrl"
+      :cutout-url="maskEditor.cutoutUrl"
+      @close="maskEditor.open = false"
+      @apply="handleMaskEditorApply"
+    />
   </section>
 </template>

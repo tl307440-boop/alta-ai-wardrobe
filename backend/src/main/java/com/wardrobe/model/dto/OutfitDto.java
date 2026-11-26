@@ -125,6 +125,7 @@ public class OutfitDto {
         private String weatherIcon;
         private List<Long> itemIds;
         private String aiReasoning;
+        private String ootdPhotoUrl;
         private Integer feedbackScore = 5;
         private String notes;
     }
@@ -133,6 +134,35 @@ public class OutfitDto {
     public static class UpdateHistoryRequest {
         private Integer feedbackScore;
         private String notes;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SuggestedSwapVo {
+        private Long itemId;
+        private String itemName;
+        private String category;
+        private String reason;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class OutfitCritiqueVo {
+        private Integer overallScore;
+        private Integer colorScore;
+        private Integer proportionScore;
+        private Integer sceneScore;
+        private String headline;
+        private List<String> highlights;
+        private List<String> improvements;
+        private SuggestedSwapVo suggestedSwap;
+        private boolean usedRealVlm;
+        private String modelUsed;
+        private String notice;
     }
 
     @Data
@@ -201,6 +231,7 @@ public class OutfitDto {
         private String tryOnImageUrl;
         private boolean isFavorite;
         private boolean usedRealLlm;
+        private boolean usedVisualReview;
         private LocalDateTime createdAt;
     }
 
@@ -221,6 +252,7 @@ public class OutfitDto {
         private List<WardrobeDto.ItemVo> items;
         private List<String> palette;
         private String aiReasoning;
+        private String ootdPhotoUrl;
         private Integer feedbackScore;
         private String notes;
     }

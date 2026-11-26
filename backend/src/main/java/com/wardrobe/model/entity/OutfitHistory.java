@@ -23,6 +23,7 @@ public class OutfitHistory {
     private String weatherIcon;
     private String itemIds;
     private String aiReasoning;
+    private String ootdPhotoUrl;
     private Integer feedbackScore;
     private String notes;
     private LocalDateTime createdAt;
