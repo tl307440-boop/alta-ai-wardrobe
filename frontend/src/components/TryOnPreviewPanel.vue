@@ -20,7 +20,10 @@ const toast = useToastStore();
 const stylePreset = ref<'studio_white' | 'street_shanghai' | 'window_light' | 'magazine_editorial'>('studio_white');
 const generationMode = ref<'auto' | 'hd' | 'chat_stream'>('auto');
 const customPrompt = ref('');
-const useReferencePhoto = ref(true);
+const selectedModelPreset = ref<string>(
+  wardrobeStore.aiConfig.modelReferenceUrl ? 'user' : '/alta/models/female-1.jpg'
+);
+const upperGarmentPreference = ref<'outerwear' | 'top'>('outerwear');
 const submitting = ref(false);
 const uploadingRef = ref(false);
 const applyingCoverId = ref<number | null>(null);
@@ -31,6 +34,12 @@ const refInput = ref<HTMLInputElement | null>(null);
 const nowTick = ref(Date.now());
 
 let ticker: number | null = null;
+
+const STANDARD_MODELS = [
+  { id: '/alta/models/female-1.jpg', label: '标准女模 · 气质', thumb: '/alta/models/female-1.jpg' },
+  { id: '/alta/models/female-2.jpg', label: '标准女模 · 休闲', thumb: '/alta/models/female-2.jpg' },
+  { id: '/alta/models/male-1.jpg', label: '标准男模 · 通勤', thumb: '/alta/models/male-1.jpg' },
+] as const;
 
 const STYLE_PRESETS = [
   { id: 'studio_white', label: '极简纯白棚拍' },
@@ -83,6 +92,38 @@ const activePreviewUrl = computed(() => {
 
 const modelRefUrl = computed(() => wardrobeStore.aiConfig.modelReferenceUrl || '');
 const hasImageApiReady = computed(() => wardrobeStore.aiConfig.hasApiKey && wardrobeStore.aiConfig.enabled);
+const vtonReady = computed(() =>
+  Boolean(
+    wardrobeStore.aiConfig.vtonEnabled &&
+      (wardrobeStore.aiConfig.hasVtonApiKey || wardrobeStore.aiConfig.vtonKeyReusesMain)
+  )
+);
+const isOnePiecePlan = computed(() =>
+  (props.plan.slots || []).some(
+    (s) =>
+      !s.missing &&
+      (s.item?.category === 'dress' ||
+        /连衣裙|连体裤|连体衣|背带裤|背带裙|长裙套装/.test(s.item?.name || ''))
+  )
+);
+const hasOuterwearAndTop = computed(() => {
+  const slots = props.plan.slots || [];
+  return (
+    slots.some((s) => !s.missing && s.slotKey === 'outerwear') &&
+    slots.some((s) => !s.missing && s.slotKey === 'top')
+  );
+});
+
+watch(
+  modelRefUrl,
+  (next, prev) => {
+    if (next && !prev) {
+      selectedModelPreset.value = 'user';
+    } else if (!next && selectedModelPreset.value === 'user') {
+      selectedModelPreset.value = '/alta/models/female-1.jpg';
+    }
+  }
+);
 
 const displayPieces = computed<VisualPieceFeature[]>(() => {
   const reportPieces = selectedJob.value?.visualReport?.pieces;
@@ -158,7 +199,7 @@ async function handleUploadRef(e: Event) {
   uploadingRef.value = true;
   try {
     await wardrobeStore.uploadModelReference(file);
-    useReferencePhoto.value = true;
+    selectedModelPreset.value = 'user';
     toast.show('本人 / 模特参考图已上传，生成试穿图时将自动携带该参考形象');
   } catch (err: any) {
     toast.show(err.message || '参考图上传失败');
@@ -172,11 +213,15 @@ async function handleGenerate() {
   if (isGenerating.value) return;
   submitting.value = true;
   try {
+    const useUserPhoto = selectedModelPreset.value === 'user' && !!modelRefUrl.value;
     const job = await lookbookStore.submitTryOnJob({
       stylePreset: stylePreset.value,
       customPrompt: customPrompt.value.trim() || undefined,
-      useReferencePhoto: useReferencePhoto.value && !!modelRefUrl.value,
+      useReferencePhoto: useUserPhoto,
       generationMode: generationMode.value,
+      modelPreset: selectedModelPreset.value,
+      upperGarmentPreference: upperGarmentPreference.value,
+      clientOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
     });
     if (job) {
       toast.show('生图任务已提交后台队列，刷新或切换页面都会自动保留进度与成图');
@@ -254,15 +299,17 @@ function downloadPreview() {
           <span
             class="px-2 py-0.5 rounded-full text-[10.5px] font-mono border"
             :class="
-              hasImageApiReady
+              vtonReady || hasImageApiReady
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 : 'bg-[#F5F5F5] text-[#666666] border-black/10'
             "
           >
             {{
-              hasImageApiReady
-                ? `中转站已激活 · ${wardrobeStore.aiConfig.imageModel || 'gpt-image-1'}`
-                : '演示降级模式（未配置生图 Key）'
+              vtonReady
+                ? `百炼 VTON 已激活 · ${wardrobeStore.aiConfig.vtonModel || 'aitryon-plus'}`
+                : hasImageApiReady
+                  ? `通用生图已激活 · ${wardrobeStore.aiConfig.imageModel || 'gpt-image-1'}`
+                  : '演示降级模式（未配置生图 Key）'
             }}
           </span>
           <span class="px-2 py-0.5 rounded-full bg-[#F5F5F5] text-[#666666] text-[10.5px]">
@@ -274,12 +321,40 @@ function downloadPreview() {
           @click="router.push({ path: '/profile', query: { tab: 'settings', panel: 'ai' } })"
           class="text-[11.5px] text-[#666666] hover:text-black underline"
         >
-          配置中转站 / 生图模型 →
+          配置百炼 VTON / 生图模型 →
         </button>
       </div>
 
-      <!-- Editorial Atmosphere Presets & Speed Mode -->
-      <div class="flex flex-wrap items-center justify-between gap-2">
+      <!-- Plan C: Clean VTON notice + optional outerwear vs top toggle -->
+      <div v-if="vtonReady" class="space-y-2">
+        <div class="px-3.5 py-2.5 rounded-2xl bg-[#FAFAFA] border border-black/[0.06] text-[11.5px] text-[#444444] leading-relaxed">
+          阿里云百炼 VTON 专业试衣已开启：直接把衣橱真实单品 1:1 贴合到所选模特身上（若接口异常或为本地 localhost，将自动无缝回退至通用生图）。
+        </div>
+        <div v-if="hasOuterwearAndTop && !isOnePiecePlan" class="flex flex-wrap items-center gap-2">
+          <span class="text-[11.5px] font-medium text-[#555555]">上身实穿主件：</span>
+          <div class="inline-flex items-center rounded-full bg-[#F2F2F2] p-0.5 border border-black/[0.06]">
+            <button
+              type="button"
+              @click="upperGarmentPreference = 'outerwear'"
+              class="px-3 py-1 rounded-full text-[11px] font-medium transition"
+              :class="upperGarmentPreference === 'outerwear' ? 'bg-black text-white' : 'text-[#555555] hover:text-black'"
+            >
+              优先实穿外套
+            </button>
+            <button
+              type="button"
+              @click="upperGarmentPreference = 'top'"
+              class="px-3 py-1 rounded-full text-[11px] font-medium transition"
+              :class="upperGarmentPreference === 'top' ? 'bg-black text-white' : 'text-[#555555] hover:text-black'"
+            >
+              优先实穿内搭上衣
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- General T2I Editorial Atmosphere Presets & Speed Mode (only shown when VTON is off) -->
+      <div v-else class="flex flex-wrap items-center justify-between gap-2">
         <div class="flex flex-wrap gap-1.5">
           <button
             v-for="p in STYLE_PRESETS"
@@ -307,40 +382,59 @@ function downloadPreview() {
         </div>
       </div>
 
-      <!-- User Model Reference Photo Card -->
-      <div class="flex flex-wrap items-center justify-between gap-3 p-3 rounded-2xl bg-[#FAFAFA] border border-black/[0.06]">
-        <div class="flex items-center gap-3 min-w-0">
-          <div class="w-12 h-12 rounded-xl bg-white border border-black/10 overflow-hidden flex items-center justify-center shrink-0">
-            <img v-if="modelRefUrl" :src="modelRefUrl" alt="参考图" class="w-full h-full object-cover" />
-            <AppIcon v-else name="user" :size="18" class="text-[#999999]" />
-          </div>
-          <div class="min-w-0">
-            <div class="text-[12.5px] font-medium text-black">
-              {{ modelRefUrl ? '已绑定本人 / 模特参考照' : '上传本人或模特全身参考照（可选）' }}
-            </div>
-            <div class="text-[11px] text-[#666666] truncate">
-              {{
-                modelRefUrl
-                  ? '生图时将携带该人物参考照与本套全部单品原图，并先由 VLM 提取领型/版型特征'
-                  : '未上传时将使用默认东方时尚模特，同时携带本套全部单品特征参与渲染'
-              }}
-            </div>
+      <!-- Model Picker: User Reference Photo + Built-in Standard Studio Models -->
+      <div class="p-3 rounded-2xl bg-[#FAFAFA] border border-black/[0.06] space-y-2.5">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-[12px] font-medium text-black">选择试穿模特（正面全身照效果最佳）</span>
+          <div class="flex items-center gap-2">
+            <input ref="refInput" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" @change="handleUploadRef" />
+            <button
+              type="button"
+              @click="refInput?.click()"
+              :disabled="uploadingRef"
+              class="px-3 py-1 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 text-[11px] font-medium text-black transition"
+            >
+              {{ uploadingRef ? '上传中...' : modelRefUrl ? '更换本人参考照' : '+ 上传本人全身照' }}
+            </button>
           </div>
         </div>
 
-        <div class="flex items-center gap-2 shrink-0">
-          <label v-if="modelRefUrl" class="inline-flex items-center gap-1.5 text-[11.5px] text-[#333333] cursor-pointer">
-            <input v-model="useReferencePhoto" type="checkbox" class="accent-black rounded" />
-            启用参考图
-          </label>
-          <input ref="refInput" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" @change="handleUploadRef" />
+        <div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
           <button
+            v-if="modelRefUrl"
             type="button"
-            @click="refInput?.click()"
-            :disabled="uploadingRef"
-            class="px-3 py-1.5 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 text-[11.5px] font-medium text-black transition"
+            @click="selectedModelPreset = 'user'"
+            class="p-1.5 rounded-xl border text-left transition flex items-center gap-2"
+            :class="
+              selectedModelPreset === 'user'
+                ? 'border-black bg-white ring-1 ring-black'
+                : 'border-black/[0.08] bg-white/70 hover:border-black/30'
+            "
           >
-            {{ uploadingRef ? '上传中...' : modelRefUrl ? '更换参考照' : '上传参考照' }}
+            <img :src="modelRefUrl" alt="本人参考照" class="w-9 h-12 rounded-lg object-cover object-top shrink-0 bg-[#F5F5F5]" />
+            <div class="min-w-0">
+              <div class="text-[11px] font-medium text-black truncate">本人参考照</div>
+              <div class="text-[10px] text-[#666666] truncate">{{ selectedModelPreset === 'user' ? '已选中' : '点击使用' }}</div>
+            </div>
+          </button>
+
+          <button
+            v-for="m in STANDARD_MODELS"
+            :key="m.id"
+            type="button"
+            @click="selectedModelPreset = m.id"
+            class="p-1.5 rounded-xl border text-left transition flex items-center gap-2"
+            :class="
+              selectedModelPreset === m.id
+                ? 'border-black bg-white ring-1 ring-black'
+                : 'border-black/[0.08] bg-white/70 hover:border-black/30'
+            "
+          >
+            <img :src="m.thumb" :alt="m.label" class="w-9 h-12 rounded-lg object-cover object-top shrink-0 bg-white" />
+            <div class="min-w-0">
+              <div class="text-[11px] font-medium text-black truncate">{{ m.label }}</div>
+              <div class="text-[10px] text-[#666666] truncate">棚拍白底</div>
+            </div>
           </button>
         </div>
       </div>
@@ -348,6 +442,7 @@ function downloadPreview() {
       <!-- Optional Custom Direction + Generate CTA -->
       <div class="flex flex-col sm:flex-row gap-2">
         <input
+          v-if="!vtonReady"
           v-model="customPrompt"
           @keyup.enter="handleGenerate"
           :disabled="isGenerating"
@@ -359,7 +454,8 @@ function downloadPreview() {
           type="button"
           @click="handleGenerate"
           :disabled="isGenerating"
-          class="px-5 py-2 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
+          :class="vtonReady ? 'w-full' : 'shrink-0'"
+          class="px-5 py-2.5 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <AppIcon v-if="isGenerating" name="loader" :size="15" class="animate-spin" />
           <AppIcon v-else name="sparkles" :size="15" />
@@ -367,8 +463,12 @@ function downloadPreview() {
             isGenerating
               ? `后台渲染中 (${elapsedSeconds}s)...`
               : activePreviewUrl
-                ? '再生成一张上身图'
-                : '一键生成 AI 上身预览图'
+                ? vtonReady
+                  ? '重新生成 1:1 专业试穿图'
+                  : '再生成一张上身图'
+                : vtonReady
+                  ? '一键生成 1:1 专业试穿效果图'
+                  : '一键生成 AI 上身预览图'
           }}
         </button>
       </div>
@@ -390,9 +490,13 @@ function downloadPreview() {
         </div>
         <div class="text-[14px] font-semibold text-black">
           {{
-            elapsedSeconds <= 6
-              ? `正在通过 VLM 解析本套 ${plan.slots.length} 件单品的领型、面料与版型特征…`
-              : '正在融合视觉特征与单品参考图，合成杂志级全身试穿大片…'
+            vtonReady
+              ? elapsedSeconds <= 6
+                ? '正在提交阿里云百炼 1:1 虚拟试衣任务，准备模特与单品高清白底图…'
+                : '百炼 VTON 正在像素级贴合衣橱原图到模特身形，完成后将自动存档…'
+              : elapsedSeconds <= 6
+                ? `正在通过 VLM 解析本套 ${plan.slots.length} 件单品的领型、面料与版型特征…`
+                : '正在融合视觉特征与单品参考图，合成杂志级全身试穿大片…'
           }}
         </div>
         <p class="text-[12px] text-[#666666] max-w-sm leading-relaxed">
@@ -468,6 +572,18 @@ function downloadPreview() {
                   />
                 </div>
                 <span class="mt-1 text-[10px] font-medium text-black truncate w-full text-center">{{ piece.slotLabel }}</span>
+                <span
+                  v-if="piece.vtonApplied"
+                  class="mt-0.5 px-1.5 py-0.2 rounded-full bg-black text-white text-[9px] font-medium"
+                >
+                  1:1 实穿
+                </span>
+                <span
+                  v-else-if="selectedJob?.visualReport?.engineType === 'dashscope_vton'"
+                  class="mt-0.5 px-1.5 py-0.2 rounded-full bg-[#EDEDED] text-[#666666] text-[9px]"
+                >
+                  搭配参考
+                </span>
               </button>
             </div>
           </div>
@@ -486,23 +602,42 @@ function downloadPreview() {
                 <span
                   class="px-2 py-0.5 rounded-full text-[10px] font-medium border"
                   :class="
-                    selectedJob.visualReport?.usedRealVlm
+                    selectedJob.visualReport?.engineType === 'dashscope_vton'
                       ? 'bg-black text-white border-black'
-                      : 'bg-white text-[#555555] border-black/10'
+                      : selectedJob.visualReport?.engineType === 'general_image'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-white text-[#555555] border-black/10'
                   "
                 >
                   {{
-                    selectedJob.visualReport?.usedRealVlm
-                      ? `VLM 看图反推 · 已解析 ${selectedJob.visualReport.referencedGarmentCount} 件`
-                      : '衣橱属性解析'
+                    selectedJob.visualReport?.engineType === 'dashscope_vton'
+                      ? '百炼 VTON 1:1 实穿'
+                      : selectedJob.visualReport?.engineType === 'general_image'
+                        ? '通用生图融合'
+                        : selectedJob.usedRealImageModel
+                          ? 'AI 试穿生图'
+                          : '杂志示意样片'
                   }}
                 </span>
                 <span
                   class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white border border-black/10 text-[#444444]"
                 >
-                  {{ selectedJob.visualReport?.usedGarmentImagesInGen ? '原图垫图融合' : '视觉描述引导' }}
+                  {{
+                    selectedJob.visualReport?.usedRealVlm
+                      ? `VLM 解析 ${selectedJob.visualReport.referencedGarmentCount} 件`
+                      : selectedJob.visualReport?.usedGarmentImagesInGen
+                        ? '原图 1:1 融合'
+                        : '衣橱属性解析'
+                  }}
                 </span>
               </div>
+            </div>
+
+            <div
+              v-if="selectedJob.visualReport?.vtonFallbackReason"
+              class="px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800 leading-relaxed"
+            >
+              {{ selectedJob.visualReport.vtonFallbackReason }}
             </div>
 
             <div
@@ -535,9 +670,23 @@ function downloadPreview() {
                 <span class="shrink-0 mt-0.5 px-1.5 py-0.5 rounded-md bg-black text-white text-[10px] font-medium">
                   {{ piece.slotLabel }}
                 </span>
-                <div class="min-w-0 text-[11.5px] leading-relaxed">
-                  <span class="font-medium text-black">{{ piece.name }}</span>
-                  <span class="text-[#666666]"> — {{ piece.zhSummary }}</span>
+                <div class="min-w-0 flex-1 text-[11.5px] leading-relaxed">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-medium text-black">{{ piece.name }}</span>
+                    <span
+                      v-if="piece.vtonApplied"
+                      class="px-1.5 py-0.2 rounded-full bg-black text-white text-[9.5px] font-medium"
+                    >
+                      1:1 实穿
+                    </span>
+                    <span
+                      v-else-if="selectedJob?.visualReport?.engineType === 'dashscope_vton'"
+                      class="px-1.5 py-0.2 rounded-full bg-[#EDEDED] text-[#666666] text-[9.5px]"
+                    >
+                      搭配参考
+                    </span>
+                  </div>
+                  <span class="text-[#666666]">{{ piece.zhSummary }}</span>
                 </div>
               </div>
             </div>
@@ -637,9 +786,11 @@ function downloadPreview() {
                   ? '进行中'
                   : job.status === 'FAILED'
                     ? '失败'
-                    : job.usedRealImageModel
-                      ? 'AI'
-                      : '样片'
+                    : job.endpointUsed?.includes('aitryon')
+                      ? 'VTON'
+                      : job.usedRealImageModel
+                        ? 'AI'
+                        : '样片'
               }}
             </span>
 

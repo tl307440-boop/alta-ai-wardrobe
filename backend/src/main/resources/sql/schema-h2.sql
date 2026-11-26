@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS `user_ai_config` (
   `chat_model` VARCHAR(100) NOT NULL DEFAULT 'qwen-plus',
   `image_model` VARCHAR(100) DEFAULT 'gpt-image-1',
   `model_reference_url` VARCHAR(500) DEFAULT NULL,
+  `vton_enabled` TINYINT NOT NULL DEFAULT 0,
+  `vton_provider` VARCHAR(50) DEFAULT 'dashscope',
+  `vton_model` VARCHAR(100) DEFAULT 'aitryon-plus',
+  `vton_api_key_encrypted` TEXT DEFAULT NULL,
+  `vton_api_key_masked` VARCHAR(100) DEFAULT NULL,
+  `vton_public_base_url` VARCHAR(500) DEFAULT NULL,
   `enabled` TINYINT NOT NULL DEFAULT 1,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -185,3 +191,9 @@ CREATE TABLE IF NOT EXISTS `try_on_job` (
 );
 
 ALTER TABLE `try_on_job` ADD COLUMN IF NOT EXISTS `visual_report` TEXT DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_enabled` TINYINT NOT NULL DEFAULT 0;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_provider` VARCHAR(50) DEFAULT 'dashscope';
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_model` VARCHAR(100) DEFAULT 'aitryon-plus';
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_api_key_encrypted` TEXT DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_api_key_masked` VARCHAR(100) DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_public_base_url` VARCHAR(500) DEFAULT NULL;

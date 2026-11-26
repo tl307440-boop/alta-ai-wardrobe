@@ -128,6 +128,13 @@ export interface AiModelConfig {
   modelReferenceUrl?: string | null;
   enabled: boolean;
   serverDefaultAvailable: boolean;
+  vtonEnabled?: boolean;
+  vtonProvider?: string;
+  vtonModel?: string;
+  hasVtonApiKey?: boolean;
+  vtonApiKeyMasked?: string;
+  vtonKeyReusesMain?: boolean;
+  vtonPublicBaseUrl?: string | null;
   updatedAt?: string;
 }
 
@@ -215,12 +222,15 @@ export interface VisualPieceFeature {
   zhSummary: string;
   enPrompt: string;
   visualGrounded: boolean;
+  vtonApplied?: boolean;
 }
 
 export interface TryOnVisualReport {
   usedRealVlm: boolean;
   referencedGarmentCount: number;
   usedGarmentImagesInGen: boolean;
+  engineType?: 'dashscope_vton' | 'general_image' | 'editorial_fallback' | string;
+  vtonFallbackReason?: string | null;
   overallPalette: string;
   bodyProfile: string;
   sceneLabel: string;

@@ -328,6 +328,9 @@ export const useLookbookStore = defineStore('lookbook', () => {
     customPrompt?: string;
     useReferencePhoto?: boolean;
     generationMode?: 'auto' | 'hd' | 'chat_stream';
+    modelPreset?: string;
+    upperGarmentPreference?: 'auto' | 'outerwear' | 'top';
+    clientOrigin?: string;
   }): Promise<TryOnJob | null> {
     if (!currentPlan.value) return null;
     const job = await outfitApi.submitTryOnJob(currentPlan.value.id, payload);

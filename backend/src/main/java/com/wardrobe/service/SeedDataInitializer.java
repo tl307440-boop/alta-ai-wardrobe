@@ -65,6 +65,25 @@ public class SeedDataInitializer implements ApplicationRunner {
                 log.debug("Skipped try_on_job.visual_report migration: {}", e.getMessage());
             }
         }
+        ensureColumn("user_ai_config", "vton_enabled", "TINYINT NOT NULL DEFAULT 0");
+        ensureColumn("user_ai_config", "vton_provider", "VARCHAR(50) DEFAULT 'dashscope'");
+        ensureColumn("user_ai_config", "vton_model", "VARCHAR(100) DEFAULT 'aitryon-plus'");
+        ensureColumn("user_ai_config", "vton_api_key_encrypted", "TEXT DEFAULT NULL");
+        ensureColumn("user_ai_config", "vton_api_key_masked", "VARCHAR(100) DEFAULT NULL");
+        ensureColumn("user_ai_config", "vton_public_base_url", "VARCHAR(500) DEFAULT NULL");
+    }
+
+    private void ensureColumn(String table, String column, String definition) {
+        try {
+            jdbcTemplate.query("SELECT " + column + " FROM " + table + " WHERE 1 = 0", rs -> null);
+        } catch (Exception missingCol) {
+            try {
+                jdbcTemplate.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+                log.info("Applied idempotent schema migration: added {}.{}", table, column);
+            } catch (Exception e) {
+                log.debug("Skipped {}.{} migration: {}", table, column, e.getMessage());
+            }
+        }
     }
 
     /**

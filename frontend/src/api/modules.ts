@@ -73,6 +73,12 @@ export const aiConfigApi = {
     chatModel: string;
     imageModel?: string;
     enabled: boolean;
+    vtonEnabled?: boolean;
+    vtonProvider?: string;
+    vtonModel?: string;
+    vtonApiKey?: string;
+    clearVtonApiKey?: boolean;
+    vtonPublicBaseUrl?: string;
   }) => unwrap<AiModelConfig>(http.put('/ai-config', payload)),
   test: (payload?: { baseUrl?: string; apiKey?: string; chatModel?: string }) =>
     unwrap<AiTestResult>(http.post('/ai-config/test', payload || {})),
@@ -154,10 +160,13 @@ export const outfitApi = {
       customPrompt?: string;
       useReferencePhoto?: boolean;
       generationMode?: 'auto' | 'hd' | 'chat_stream';
+      modelPreset?: string;
+      upperGarmentPreference?: 'auto' | 'outerwear' | 'top';
+      clientOrigin?: string;
     }
   ) =>
     unwrap<TryOnResult>(
-      http.post(`/outfit/plans/${planId}/try-on`, payload || {}, { timeout: 120000 })
+      http.post(`/outfit/plans/${planId}/try-on`, payload || {}, { timeout: 160000 })
     ),
   submitTryOnJob: (
     planId: number,
@@ -166,6 +175,9 @@ export const outfitApi = {
       customPrompt?: string;
       useReferencePhoto?: boolean;
       generationMode?: 'auto' | 'hd' | 'chat_stream';
+      modelPreset?: string;
+      upperGarmentPreference?: 'auto' | 'outerwear' | 'top';
+      clientOrigin?: string;
     }
   ) => unwrap<TryOnJob>(http.post(`/outfit/plans/${planId}/try-on/jobs`, payload || {})),
   listTryOnJobs: (planId?: number, limit = 18) =>
