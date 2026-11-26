@@ -3,6 +3,7 @@ package com.wardrobe;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wardrobe.service.AiConfigService;
+import com.wardrobe.service.SeedDataInitializer;
 import com.wardrobe.service.StorageService;
 import com.wardrobe.service.client.DashScopeVtonClient;
 import com.wardrobe.service.client.MultimodalLlmClient;
@@ -44,6 +45,9 @@ class AiWardrobeIntegrationTest {
 
     @Autowired
     private StorageService storageService;
+
+    @Autowired
+    private SeedDataInitializer seedDataInitializer;
 
     @MockBean
     private MultimodalLlmClient llmClient;
@@ -1040,5 +1044,38 @@ class AiWardrobeIntegrationTest {
                 storageService.preparePublicVtonImageUrl(userId, "/uploads/user_999999/secret.jpg", "http://47.111.163.151:8680"));
         org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () ->
                 storageService.preparePublicVtonImageUrl(userId, "/alta/pieces/../../etc/passwd", "http://47.111.163.151:8680"));
+    }
+
+    @Test
+    void testCuratedDemoItemsSeededIdempotently() throws Exception {
+        String demoToken = loginAsDemo();
+
+        MvcResult res = mockMvc.perform(get("/api/wardrobe/items")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode items = objectMapper.readTree(
+                res.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
+        assertThat(items.size()).isGreaterThanOrEqualTo(46);
+
+        Map<String, String> processedByName = new java.util.HashMap<>();
+        for (JsonNode item : items) {
+            processedByName.put(item.path("name").asText(), item.path("processedImageUrl").asText());
+        }
+        assertThat(processedByName.get("炭灰毛领修身短款辣妹夹克")).startsWith("/alta/pieces/demo-p");
+        assertThat(processedByName.get("极简黑漆皮尖头细跟露跟高跟鞋")).startsWith("/alta/pieces/demo-p");
+        assertThat(processedByName.get("灰调细条纹辣妹显瘦微喇长裤")).startsWith("/alta/pieces/demo-p");
+
+        // Re-running backfill must remain completely idempotent (zero duplicate inserts)
+        int countBefore = items.size();
+        seedDataInitializer.backfillDemoCuratedItems();
+
+        MvcResult resAfter = mockMvc.perform(get("/api/wardrobe/items")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode itemsAfter = objectMapper.readTree(
+                resAfter.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
+        assertThat(itemsAfter.size()).isEqualTo(countBefore);
     }
 }
