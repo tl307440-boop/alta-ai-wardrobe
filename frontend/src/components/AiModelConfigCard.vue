@@ -20,7 +20,7 @@ const form = reactive({
   enabled: true,
   vtonEnabled: false,
   vtonProvider: 'dashscope',
-  vtonModel: 'aitryon-plus',
+  vtonModel: 'qwen-image-2.1-pro',
   vtonApiKey: '',
   vtonPublicBaseUrl: '',
 });
@@ -32,6 +32,12 @@ const testing = ref(false);
 const uploadingRef = ref(false);
 const refFileInput = ref<HTMLInputElement | null>(null);
 const testResult = ref<AiTestResult | null>(null);
+
+const ACTIVE_VTON_MODELS = ['qwen-image-2.1-pro', 'qwen-image-2.1-turbo', 'qwen-image-3.0-pro', 'wan2.7-image-pro'] as const;
+const normalizeClientVtonModel = (raw?: string | null) => {
+  const v = (raw || '').trim().toLowerCase();
+  return (ACTIVE_VTON_MODELS as readonly string[]).includes(v) ? v : 'qwen-image-2.1-pro';
+};
 
 watch(
   () => wardrobeStore.aiConfig,
@@ -45,7 +51,7 @@ watch(
     form.enabled = cfg.enabled;
     form.vtonEnabled = Boolean(cfg.vtonEnabled);
     form.vtonProvider = cfg.vtonProvider || 'dashscope';
-    form.vtonModel = cfg.vtonModel === 'aitryon' ? 'aitryon' : 'aitryon-plus';
+    form.vtonModel = normalizeClientVtonModel(cfg.vtonModel);
     form.vtonPublicBaseUrl = cfg.vtonPublicBaseUrl || '';
   },
   { immediate: true }
@@ -326,7 +332,7 @@ async function handleClearReference() {
       <div class="p-4 rounded-2xl bg-[#FAFAFA] border border-black/[0.08] space-y-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-[13px] font-semibold text-black">专业虚拟试衣通道 · 阿里云百炼 AI 试衣（VTON）</span>
+            <span class="text-[13px] font-semibold text-black">专业虚拟试衣通道 · 阿里云百炼多图融合（VTON）</span>
             <span
               class="px-2 py-0.5 rounded-full text-[10.5px] font-mono border"
               :class="
@@ -339,50 +345,76 @@ async function handleClearReference() {
               {{
                 wardrobeStore.aiConfig.vtonEnabled &&
                 (wardrobeStore.aiConfig.hasVtonApiKey || wardrobeStore.aiConfig.vtonKeyReusesMain)
-                  ? `百炼 VTON 已激活 · ${wardrobeStore.aiConfig.vtonModel || 'aitryon-plus'}`
+                  ? `百炼多图试穿已激活 · ${normalizeClientVtonModel(wardrobeStore.aiConfig.vtonModel)}`
                   : '未启用 · 使用通用生图'
               }}
             </span>
           </div>
           <label class="inline-flex items-center gap-1.5 text-[12px] font-medium text-black cursor-pointer">
             <input v-model="form.vtonEnabled" type="checkbox" class="accent-black rounded" />
-            启用百炼 AI 试衣（1:1 真实上身）
+            启用 1:1 多图虚拟试穿
           </label>
         </div>
 
         <p class="text-[11.5px] text-[#666666] leading-relaxed">
-          使用阿里云百炼 <code class="font-mono">aitryon</code> / <code class="font-mono">aitryon-plus</code> 将衣橱真实单品像素级贴合到模特身上，不消耗本机算力；若接口失败或本地未映射公网地址，系统将自动无缝回退至上方通用生图模型。
+          使用阿里云百炼新一代多图融合模型（默认 <code class="font-mono">qwen-image-2.1-pro</code>），在服务端自动将模特图与最多 5 件单品抠图转为白底 JPEG Base64 直传合成，<strong>本地与公网环境均可直接使用</strong>；若配额或网络异常，自动无缝回退至上方通用生图模型。
         </p>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div class="grid grid-cols-1 gap-3">
           <div>
-            <label class="block text-[11.5px] font-medium text-[#333333] mb-1">试衣模型版本</label>
-            <div class="grid grid-cols-2 gap-1.5">
+            <label class="block text-[11.5px] font-medium text-[#333333] mb-1">百炼多图试穿模型</label>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
               <button
                 type="button"
-                @click="form.vtonModel = 'aitryon-plus'"
+                @click="form.vtonModel = 'qwen-image-2.1-pro'"
                 class="px-3 py-2 rounded-xl border text-[11.5px] font-medium text-left transition"
                 :class="
-                  form.vtonModel === 'aitryon-plus'
+                  form.vtonModel === 'qwen-image-2.1-pro'
                     ? 'bg-black text-white border-black'
                     : 'bg-white text-[#333333] border-black/10 hover:border-black/30'
                 "
               >
-                <div class="font-mono">aitryon-plus</div>
-                <div class="text-[10px] opacity-80">推荐 · 高清版</div>
+                <div class="font-mono">qwen-image-2.1-pro（推荐）</div>
+                <div class="text-[10px] opacity-80">全套最多5件融合 · 免费额度通常默认可用</div>
               </button>
               <button
                 type="button"
-                @click="form.vtonModel = 'aitryon'"
+                @click="form.vtonModel = 'qwen-image-2.1-turbo'"
                 class="px-3 py-2 rounded-xl border text-[11.5px] font-medium text-left transition"
                 :class="
-                  form.vtonModel === 'aitryon'
+                  form.vtonModel === 'qwen-image-2.1-turbo'
                     ? 'bg-black text-white border-black'
                     : 'bg-white text-[#333333] border-black/10 hover:border-black/30'
                 "
               >
-                <div class="font-mono">aitryon</div>
-                <div class="text-[10px] opacity-80">极速基础版</div>
+                <div class="font-mono">qwen-image-2.1-turbo（极速）</div>
+                <div class="text-[10px] opacity-80">全套最多5件融合 · 生成速度更快</div>
+              </button>
+              <button
+                type="button"
+                @click="form.vtonModel = 'qwen-image-3.0-pro'"
+                class="px-3 py-2 rounded-xl border text-[11.5px] font-medium text-left transition"
+                :class="
+                  form.vtonModel === 'qwen-image-3.0-pro'
+                    ? 'bg-black text-white border-black'
+                    : 'bg-white text-[#333333] border-black/10 hover:border-black/30'
+                "
+              >
+                <div class="font-mono">qwen-image-3.0-pro（精选2件）</div>
+                <div class="text-[10px] opacity-80">专注上/下装核心单品精细贴合</div>
+              </button>
+              <button
+                type="button"
+                @click="form.vtonModel = 'wan2.7-image-pro'"
+                class="px-3 py-2 rounded-xl border text-[11.5px] font-medium text-left transition"
+                :class="
+                  form.vtonModel === 'wan2.7-image-pro'
+                    ? 'bg-black text-white border-black'
+                    : 'bg-white text-[#333333] border-black/10 hover:border-black/30'
+                "
+              >
+                <div class="font-mono">wan2.7-image-pro（万相）</div>
+                <div class="text-[10px] opacity-80">写实光影与全套最多5件生图强</div>
               </button>
             </div>
           </div>
@@ -434,7 +466,10 @@ async function handleClearReference() {
 
         <div>
           <div class="flex items-center justify-between gap-2 mb-1">
-            <label class="text-[11.5px] font-medium text-[#333333]">公网访问基地址（Public Base URL）</label>
+            <label class="text-[11.5px] font-medium text-[#333333]">
+              可选静态资产回源地址
+              <span class="font-normal text-[#666666]">（已升级 Base64 直传，通常留空即可）</span>
+            </label>
             <button
               type="button"
               @click="fillCurrentOrigin"
@@ -446,11 +481,11 @@ async function handleClearReference() {
           <input
             v-model.trim="form.vtonPublicBaseUrl"
             type="url"
-            placeholder="例如 http://47.111.163.151:8680（留空则自动读取当前公网域名/IP）"
+            placeholder="例如 http://47.111.163.151:8680（仅跨容器读取静态模特/单品图时备用）"
             class="w-full px-3.5 py-2 rounded-xl bg-white border border-black/10 focus:border-black outline-none text-[12px] font-mono transition"
           />
           <p class="text-[10.5px] text-[#777777] mt-1">
-            百炼试衣需要从公网 HTTP/HTTPS 地址拉取模特照与衣物图；本地 <code class="font-mono">localhost / 127.0.0.1</code> 测试环境无法被阿里云访问时，系统将自动平滑回退到通用生图通道。
+            服务端会自动把所有用户抠图与模特照压缩为白底 JPEG Base64 直传阿里云百炼，<code class="font-mono">localhost / 127.0.0.1</code> 本地开发同样可直接体验 1:1 实穿效果。
           </p>
         </div>
       </div>

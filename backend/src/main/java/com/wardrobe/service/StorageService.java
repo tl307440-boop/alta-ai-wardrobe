@@ -246,6 +246,40 @@ public class StorageService {
     }
 
     /**
+     * Loads an authorized local/internal image (JPG/PNG/WEBP cutout) and normalizes it into
+     * an opaque white-backdrop JPEG Base64 data URI (<= 1280px) suitable for Bailian multi-image VTON.
+     */
+    public String prepareVtonBase64DataUri(Long userId, String assetUrl, String optionalPublicBase) {
+        if (assetUrl == null || assetUrl.isBlank()) {
+            return null;
+        }
+        String cleanAsset = assetUrl.trim();
+        if (cleanAsset.startsWith("svg://")) {
+            return null;
+        }
+        if (cleanAsset.contains("..") || cleanAsset.contains("?") || cleanAsset.contains("#")) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "禁止访问非法路径资产");
+        }
+        String userPrefix = "/uploads/user_" + userId + "/";
+        boolean isUserUpload = cleanAsset.startsWith(userPrefix);
+        boolean isStaticAlta = cleanAsset.startsWith("/alta/models/") || cleanAsset.startsWith("/alta/pieces/");
+        if (!isUserUpload && !isStaticAlta) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "无权访问跨用户或未授权的资产");
+        }
+
+        StoredImage stored = readGarmentImageForAi(userId, cleanAsset);
+        byte[] rawBytes = stored != null ? stored.bytes() : null;
+        if ((rawBytes == null || rawBytes.length == 0) && isStaticAlta) {
+            rawBytes = fetchInternalAssetBytes(cleanAsset, optionalPublicBase);
+        }
+        if (rawBytes == null || rawBytes.length < 12) {
+            return null;
+        }
+        byte[] jpegBytes = toWhiteBackdropJpegBytes(rawBytes, 384, 1280, 0.88f, cleanAsset);
+        return "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(jpegBytes);
+    }
+
+    /**
      * Resolves a DashScope-ready public HTTP(S) URL for VTON (JPG/PNG only, 5KB–5MB).
      * Automatically converts .webp or out-of-spec user uploads into cached white-backdrop JPEGs under /uploads/user_{id}/.
      */
@@ -365,25 +399,37 @@ public class StorageService {
                 return "/uploads/user_" + userId + "/" + filename;
             }
 
+            byte[] jpegBytes = toWhiteBackdropJpegBytes(rawBytes, 512, 1360, 0.92f, cacheKey);
+            Files.write(target, jpegBytes);
+            return "/uploads/user_" + userId + "/" + filename;
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception e) {
+            throw new IllegalStateException("转换百炼 VTON 兼容 JPG 图片失败：" + e.getMessage(), e);
+        }
+    }
+
+    private byte[] toWhiteBackdropJpegBytes(byte[] rawBytes, int minDim, int maxDimLimit, float quality, String label) {
+        try {
             BufferedImage src = ImageIO.read(new ByteArrayInputStream(rawBytes));
             if (src == null || src.getWidth() < 2 || src.getHeight() < 2) {
-                throw new IllegalStateException("无法解码待转换图片：" + cacheKey);
+                throw new IllegalStateException("无法解码待转换图片：" + label);
             }
 
             int srcW = src.getWidth();
             int srcH = src.getHeight();
             int maxDim = Math.max(srcW, srcH);
             double scale = 1.0;
-            if (maxDim > 1360) {
-                scale = 1360.0 / maxDim;
-            } else if (maxDim < 512) {
-                scale = 512.0 / maxDim;
+            if (maxDim > maxDimLimit) {
+                scale = (double) maxDimLimit / maxDim;
+            } else if (maxDim < minDim) {
+                scale = (double) minDim / maxDim;
             }
             int drawW = Math.max(1, (int) Math.round(srcW * scale));
             int drawH = Math.max(1, (int) Math.round(srcH * scale));
-            int pad = Math.max(20, (int) Math.round(Math.max(drawW, drawH) * 0.06));
-            int canvasW = Math.min(1536, Math.max(360, drawW + pad * 2));
-            int canvasH = Math.min(1536, Math.max(360, drawH + pad * 2));
+            int pad = Math.max(16, (int) Math.round(Math.max(drawW, drawH) * 0.05));
+            int canvasW = Math.min(maxDimLimit + 176, Math.max(360, drawW + pad * 2));
+            int canvasH = Math.min(maxDimLimit + 176, Math.max(360, drawH + pad * 2));
             int drawX = (canvasW - drawW) / 2;
             int drawY = (canvasH - drawH) / 2;
 
@@ -402,14 +448,13 @@ public class StorageService {
             try (MemoryCacheImageOutputStream out = new MemoryCacheImageOutputStream(baos)) {
                 ImageWriteParam param = writer.getDefaultWriteParam();
                 param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-                param.setCompressionQuality(0.92f);
+                param.setCompressionQuality(quality);
                 writer.setOutput(out);
                 writer.write(null, new IIOImage(canvas, null, null), param);
             } finally {
                 writer.dispose();
             }
-            Files.write(target, baos.toByteArray());
-            return "/uploads/user_" + userId + "/" + filename;
+            return baos.toByteArray();
         } catch (BusinessException be) {
             throw be;
         } catch (Exception e) {

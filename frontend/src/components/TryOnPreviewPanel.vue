@@ -306,7 +306,7 @@ function downloadPreview() {
           >
             {{
               vtonReady
-                ? `百炼 VTON 已激活 · ${wardrobeStore.aiConfig.vtonModel || 'aitryon-plus'}`
+                ? `百炼多图试穿已激活 · ${wardrobeStore.aiConfig.vtonModel || 'qwen-image-2.1-pro'}`
                 : hasImageApiReady
                   ? `通用生图已激活 · ${wardrobeStore.aiConfig.imageModel || 'gpt-image-1'}`
                   : '演示降级模式（未配置生图 Key）'
@@ -325,13 +325,20 @@ function downloadPreview() {
         </button>
       </div>
 
-      <!-- Plan C: Clean VTON notice + optional outerwear vs top toggle -->
+      <!-- Plan C: Clean multi-image VTON notice + optional 3.0-pro upper garment selector -->
       <div v-if="vtonReady" class="space-y-2">
         <div class="px-3.5 py-2.5 rounded-2xl bg-[#FAFAFA] border border-black/[0.06] text-[11.5px] text-[#444444] leading-relaxed">
-          阿里云百炼 VTON 专业试衣已开启：直接把衣橱真实单品 1:1 贴合到所选模特身上（若接口异常或为本地 localhost，将自动无缝回退至通用生图）。
+          {{
+            wardrobeStore.aiConfig.vtonModel === 'qwen-image-3.0-pro'
+              ? '阿里云百炼 qwen-image-3.0-pro 精细试衣已开启：1:1 融合模特与核心 2 件上下装（本地与公网均可直连，失败自动回退通用生图）。'
+              : '阿里云百炼多图虚拟试穿已开启：Base64 直传模特与最多 5 件衣橱单品实现全套 1:1 融合（本地与公网均可直连，支持自定义场景光影与微调指令）。'
+          }}
         </div>
-        <div v-if="hasOuterwearAndTop && !isOnePiecePlan" class="flex flex-wrap items-center gap-2">
-          <span class="text-[11.5px] font-medium text-[#555555]">上身实穿主件：</span>
+        <div
+          v-if="wardrobeStore.aiConfig.vtonModel === 'qwen-image-3.0-pro' && hasOuterwearAndTop && !isOnePiecePlan"
+          class="flex flex-wrap items-center gap-2"
+        >
+          <span class="text-[11.5px] font-medium text-[#555555]">3.0-pro 优先上装：</span>
           <div class="inline-flex items-center rounded-full bg-[#F2F2F2] p-0.5 border border-black/[0.06]">
             <button
               type="button"
@@ -353,8 +360,8 @@ function downloadPreview() {
         </div>
       </div>
 
-      <!-- General T2I Editorial Atmosphere Presets & Speed Mode (only shown when VTON is off) -->
-      <div v-else class="flex flex-wrap items-center justify-between gap-2">
+      <!-- Editorial Atmosphere Presets & Speed Mode -->
+      <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="flex flex-wrap gap-1.5">
           <button
             v-for="p in STYLE_PRESETS"
@@ -368,7 +375,10 @@ function downloadPreview() {
           </button>
         </div>
 
-        <div class="inline-flex items-center rounded-full bg-[#F2F2F2] p-0.5 border border-black/[0.06]">
+        <div
+          v-if="!vtonReady"
+          class="inline-flex items-center rounded-full bg-[#F2F2F2] p-0.5 border border-black/[0.06]"
+        >
           <button
             v-for="m in GENERATION_MODES"
             :key="m.id"
@@ -442,7 +452,6 @@ function downloadPreview() {
       <!-- Optional Custom Direction + Generate CTA -->
       <div class="flex flex-col sm:flex-row gap-2">
         <input
-          v-if="!vtonReady"
           v-model="customPrompt"
           @keyup.enter="handleGenerate"
           :disabled="isGenerating"
@@ -454,8 +463,7 @@ function downloadPreview() {
           type="button"
           @click="handleGenerate"
           :disabled="isGenerating"
-          :class="vtonReady ? 'w-full' : 'shrink-0'"
-          class="px-5 py-2.5 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+          class="shrink-0 px-5 py-2.5 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <AppIcon v-if="isGenerating" name="loader" :size="15" class="animate-spin" />
           <AppIcon v-else name="sparkles" :size="15" />
@@ -492,8 +500,8 @@ function downloadPreview() {
           {{
             vtonReady
               ? elapsedSeconds <= 6
-                ? '正在提交阿里云百炼 1:1 虚拟试衣任务，准备模特与单品高清白底图…'
-                : '百炼 VTON 正在像素级贴合衣橱原图到模特身形，完成后将自动存档…'
+                ? '正在转换模特与衣橱原图为白底高清 JPEG Base64，提交百炼多图融合…'
+                : '阿里云百炼正在 1:1 像素级融合全套真实衣物与模特身形，完成后自动存档…'
               : elapsedSeconds <= 6
                 ? `正在通过 VLM 解析本套 ${plan.slots.length} 件单品的领型、面料与版型特征…`
                 : '正在融合视觉特征与单品参考图，合成杂志级全身试穿大片…'
@@ -786,7 +794,7 @@ function downloadPreview() {
                   ? '进行中'
                   : job.status === 'FAILED'
                     ? '失败'
-                    : job.endpointUsed?.includes('aitryon')
+                    : job.visualReport?.engineType === 'dashscope_vton' || job.endpointUsed?.includes('vton') || job.endpointUsed?.includes('qwen-image') || job.endpointUsed?.includes('wan2.7') || job.endpointUsed?.includes('aitryon')
                       ? 'VTON'
                       : job.usedRealImageModel
                         ? 'AI'
