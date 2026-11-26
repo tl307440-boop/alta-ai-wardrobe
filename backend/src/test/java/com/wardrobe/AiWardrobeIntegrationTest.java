@@ -3,6 +3,7 @@ package com.wardrobe;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wardrobe.service.AiConfigService;
+import com.wardrobe.service.StorageService;
 import com.wardrobe.service.client.MultimodalLlmClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,9 @@ class AiWardrobeIntegrationTest {
 
     @Autowired
     private AiConfigService aiConfigService;
+
+    @Autowired
+    private StorageService storageService;
 
     @MockBean
     private MultimodalLlmClient llmClient;
@@ -405,7 +409,18 @@ class AiWardrobeIntegrationTest {
                         ))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.previewImageUrl").isNotEmpty())
-                .andExpect(jsonPath("$.data.promptUsed").isNotEmpty());
+                .andExpect(jsonPath("$.data.promptUsed").isNotEmpty())
+                .andExpect(jsonPath("$.data.visualReport").isMap())
+                .andExpect(jsonPath("$.data.visualReport.bodyProfile").isNotEmpty())
+                .andExpect(jsonPath("$.data.visualReport.sceneLabel").isNotEmpty())
+                .andExpect(jsonPath("$.data.visualReport.overallPalette").isNotEmpty())
+                .andExpect(jsonPath("$.data.visualReport.pieces").isArray())
+                .andExpect(jsonPath("$.data.visualReport.pieces[0].zhSummary").isNotEmpty())
+                .andExpect(jsonPath("$.data.visualReport.pieces[0].enPrompt").isNotEmpty());
+
+        // Security check: StorageService.readGarmentImageForAi blocks path traversal & cross-user uploads
+        assertThat(storageService.readGarmentImageForAi(1L, "/alta/pieces/../../etc/passwd")).isNull();
+        assertThat(storageService.readGarmentImageForAi(1L, "/uploads/user_999/secret.png")).isNull();
 
         // Cleanup reference photo
         mockMvc.perform(delete("/api/ai-config/model-reference")
@@ -467,12 +482,14 @@ class AiWardrobeIntegrationTest {
         assertThat(status).isEqualTo("SUCCEEDED");
         assertThat(previewUrl).isNotBlank();
 
-        // 3. List recent jobs and verify persistence across reloads
+        // 3. List recent jobs and verify persistence (including visualReport) across reloads
         mockMvc.perform(get("/api/outfit/try-on/jobs")
                         .header("Authorization", "Bearer " + demoToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].id").value(jobId))
-                .andExpect(jsonPath("$.data[0].previewImageUrl").value(previewUrl));
+                .andExpect(jsonPath("$.data[0].previewImageUrl").value(previewUrl))
+                .andExpect(jsonPath("$.data[0].visualReport").isMap())
+                .andExpect(jsonPath("$.data[0].visualReport.pieces").isArray());
 
         // 4. Register another user and verify cross-user IDOR on job & plan returns 40301
         String otherUser = "idor_tryon_" + System.currentTimeMillis();

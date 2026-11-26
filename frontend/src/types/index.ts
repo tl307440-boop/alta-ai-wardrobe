@@ -204,6 +204,29 @@ export interface CollageNode {
   labelText?: string;
 }
 
+export interface VisualPieceFeature {
+  slotKey: string;
+  slotLabel: string;
+  itemId?: number;
+  name: string;
+  imageUrl?: string;
+  colorHex?: string;
+  svgType?: string;
+  zhSummary: string;
+  enPrompt: string;
+  visualGrounded: boolean;
+}
+
+export interface TryOnVisualReport {
+  usedRealVlm: boolean;
+  referencedGarmentCount: number;
+  usedGarmentImagesInGen: boolean;
+  overallPalette: string;
+  bodyProfile: string;
+  sceneLabel: string;
+  pieces: VisualPieceFeature[];
+}
+
 export interface TryOnResult {
   planId: number;
   previewImageUrl: string;
@@ -213,6 +236,7 @@ export interface TryOnResult {
   endpointUsed?: string;
   promptUsed: string;
   notice?: string;
+  visualReport?: TryOnVisualReport | null;
 }
 
 export interface TryOnJob {
@@ -231,6 +255,7 @@ export interface TryOnJob {
   previewImageUrl?: string | null;
   notice?: string | null;
   errorMessage?: string | null;
+  visualReport?: TryOnVisualReport | null;
   createdAt?: string;
   updatedAt?: string;
 }

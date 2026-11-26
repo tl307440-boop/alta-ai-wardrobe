@@ -245,6 +245,55 @@ public class MultimodalLlmClient {
     }
 
     /**
+     * Visual reverse captioning for Try-On Grounding: inspects all real garment cutouts/photos together
+     * so downstream image generation receives exact collar, cut, fabric, hardware, and shade details.
+     */
+    public JsonNode extractOutfitVisualDetails(AiConfigService.ResolvedAiCredentials creds,
+                                               String slotsMetadataText,
+                                               List<String> garmentImageDataUris) {
+        if (garmentImageDataUris == null || garmentImageDataUris.isEmpty()) {
+            return null;
+        }
+        String systemPrompt = """
+                你是资深高奢时装视觉总监。你将收到当前整套穿搭中每一件真实单品的图片（按用户提示中的 [图1]、[图2]... 顺序排列）及其名称品类。
+                请严格**基于图片中实际可见的服装细节**进行结构化视觉特征反推，禁止凭空编造图中不存在的图案、文字或款式，仅返回合法 JSON，禁止输出 Markdown 围栏：
+                {
+                  "overallPalette": "燕麦浅米与复古深靛蓝形成柔和冷暖对比，哑光尼龙搭配重磅纯棉层次感清晰",
+                  "items": [
+                    {
+                      "slotKey": "outerwear",
+                      "zhSummary": "立领落肩短款夹克 · 哑光浅燕麦色防风面料 · 金属拉链与斜插袋设计",
+                      "enPrompt": "cropped drop-shoulder jacket in matte light oatmeal beige technical fabric with stand collar, concealed front zip, and angled welt pockets"
+                    }
+                  ]
+                }
+                要求：
+                1. items 数组必须覆盖传入列表里的每一件单品并严格保留对应的 slotKey；
+                2. zhSummary 用 14~32 字中文精确概括该单品图上的真实廓形、领型、材质肌理、扣饰/口袋与真实色偏；
+                3. enPrompt 用 18~36 个英文单词精准描述图中这件衣服的真实版型、领口、袖型、衣长/裤长、面料纹理、五金/扣子与色彩深浅，专用于高还原度生图模型提示词；
+                4. overallPalette 用 16~34 字中文总结整套单品的色彩与材质协同度。
+                """;
+        String userText = "请按图片顺序逐件提取以下穿搭单品的真实视觉细节：\n" + slotsMetadataText;
+        return callVisionForJson(creds, systemPrompt, userText, garmentImageDataUris);
+    }
+
+    /**
+     * Converts raw garment image bytes to a compact data URI suitable for VLM inspection.
+     * Large PNG/JPGs are resized to <= 512px JPEG; compact WebP files are passed through directly.
+     */
+    public String toCompactVisionDataUri(String filename, String mimeType, byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        String safeMime = (mimeType != null && !mimeType.isBlank()) ? mimeType : "image/jpeg";
+        if (!"image/webp".equalsIgnoreCase(safeMime) && bytes.length > 140 * 1024) {
+            ReferenceImageInput compressed = compressReferenceImage(new ReferenceImageInput(filename, safeMime, bytes), 512);
+            return "data:" + compressed.mimeType() + ";base64," + Base64.getEncoder().encodeToString(compressed.bytes());
+        }
+        return "data:" + safeMime + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
+    /**
      * Visual AI Outfit Critique ("AI 搭配体检"): evaluates either a flat-lay collage canvas or a real mirror OOTD photo.
      */
     public JsonNode critiqueOutfitVisual(AiConfigService.ResolvedAiCredentials creds,
@@ -813,10 +862,21 @@ public class MultimodalLlmClient {
 
     private JsonNode callVisionForJson(AiConfigService.ResolvedAiCredentials creds, String systemPrompt,
                                        String userText, String imageDataUri) {
-        List<Map<String, Object>> userContent = List.of(
-                Map.of("type", "text", "text", userText),
-                Map.of("type", "image_url", "image_url", Map.of("url", imageDataUri))
-        );
+        return callVisionForJson(creds, systemPrompt, userText,
+                (imageDataUri != null && !imageDataUri.isBlank()) ? List.of(imageDataUri) : Collections.emptyList());
+    }
+
+    private JsonNode callVisionForJson(AiConfigService.ResolvedAiCredentials creds, String systemPrompt,
+                                       String userText, List<String> imageDataUris) {
+        List<Map<String, Object>> userContent = new ArrayList<>();
+        userContent.add(Map.of("type", "text", "text", userText));
+        if (imageDataUris != null) {
+            for (String uri : imageDataUris) {
+                if (uri != null && !uri.isBlank()) {
+                    userContent.add(Map.of("type", "image_url", "image_url", Map.of("url", uri)));
+                }
+            }
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", creds.visionModel());
         body.put("temperature", 0.2);

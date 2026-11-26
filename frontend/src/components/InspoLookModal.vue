@@ -27,6 +27,7 @@ const commentInput = ref('');
 const localComments = ref<string[]>([]);
 const failedPieceImgs = ref<Record<string, boolean>>({});
 const modelImgFailed = ref(false);
+const restyling = ref(false);
 
 watch(
   () => props.look,
@@ -49,17 +50,26 @@ function submitComment() {
 }
 
 async function restyleWithMyCloset() {
-  if (!props.look) return;
-  const query = `参考「${props.look.creatorName}」的${props.look.styleTag}造型（${props.look.title}），优先用我衣橱已有单品搭配`;
+  if (!props.look || restyling.value) return;
+  const look = props.look;
+  restyling.value = true;
+  toast.show(`正在按「${look.styleTag}」灵感匹配你的衣橱单品…`);
+  const query = `参考「${look.creatorName}」的${look.styleTag}造型（${look.title}），优先用我衣橱已有单品搭配`;
   lookbookStore.triggerMode = 'nl';
   lookbookStore.nlQuery = query;
-  emit('close');
-  router.push('/lookbook');
-  await lookbookStore.generateRecommendation({
-    triggerType: 'nl_query',
-    userQuery: query,
-  });
-  toast.show(`已按「${props.look.styleTag}」灵感为你生成个人衣橱复刻方案`);
+  try {
+    await lookbookStore.generateRecommendation({
+      triggerType: 'nl_query',
+      userQuery: query,
+    });
+    emit('close');
+    router.push('/lookbook');
+    toast.show(`已按「${look.styleTag}」灵感为你生成个人衣橱复刻方案`);
+  } catch (e: any) {
+    toast.show(e?.message || '复刻搭配失败，请重试');
+  } finally {
+    restyling.value = false;
+  }
 }
 
 function isRealImg(url?: string, key?: string) {
@@ -106,10 +116,12 @@ function markPieceFailed(key: string) {
           >
             <button
               @click="restyleWithMyCloset"
-              class="w-full px-4 py-2 text-left hover:bg-[#F5F5F5] flex items-center gap-2 text-black"
+              :disabled="restyling"
+              class="w-full px-4 py-2 text-left hover:bg-[#F5F5F5] flex items-center gap-2 text-black disabled:opacity-55 disabled:cursor-not-allowed"
             >
-              <AppIcon name="sparkles" :size="14" />
-              用我的衣橱复刻
+              <AppIcon v-if="restyling" name="loader" :size="14" class="animate-spin" />
+              <AppIcon v-else name="sparkles" :size="14" />
+              {{ restyling ? '正在匹配衣橱…' : '用我的衣橱复刻' }}
             </button>
             <button
               @click="
@@ -238,15 +250,17 @@ function markPieceFailed(key: string) {
 
             <button
               @click="restyleWithMyCloset"
-              class="flex flex-col items-center gap-1 group focus:outline-none"
+              :disabled="restyling"
+              class="flex flex-col items-center gap-1 group focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
               title="用我的衣橱复刻此造型"
             >
               <span
                 class="w-10 h-10 rounded-full bg-black text-white hover:bg-[#262626] shadow-card flex items-center justify-center transition group-active:scale-90"
               >
-                <AppIcon name="refresh" :size="17" />
+                <AppIcon v-if="restyling" name="loader" :size="17" class="animate-spin" />
+                <AppIcon v-else name="refresh" :size="17" />
               </span>
-              <span class="text-[11.5px] font-mono text-black">{{ look.restylesCount }}</span>
+              <span class="text-[11.5px] font-mono text-black">{{ restyling ? '匹配中' : look.restylesCount }}</span>
             </button>
           </div>
         </div>
@@ -279,7 +293,8 @@ function markPieceFailed(key: string) {
             />
             <button
               @click="submitComment"
-              class="px-4 py-2 rounded-full bg-black text-white text-[12px] font-medium hover:bg-[#262626] transition"
+              :disabled="!commentInput.trim()"
+              class="px-4 py-2 rounded-full bg-black text-white text-[12px] font-medium hover:bg-[#262626] transition disabled:opacity-40 disabled:cursor-not-allowed"
             >
               发送
             </button>

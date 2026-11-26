@@ -19,6 +19,9 @@ public class StorageService {
 
     private final Path rootDir;
 
+    @Value("${app.storage.frontend-public-dir:../frontend/public}")
+    private String frontendPublicDir = "../frontend/public";
+
     public StorageService(@Value("${app.storage.upload-dir:./uploads}") String uploadDir) {
         this.rootDir = Paths.get(uploadDir).toAbsolutePath().normalize();
         try {
@@ -142,6 +145,53 @@ public class StorageService {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /**
+     * Safely resolves a garment image for AI try-on/visual extraction from either the current user's
+     * upload folder or the vetted public Alta cutout catalog (/alta/pieces/<filename>).
+     * Blocks all cross-user upload paths and directory traversal attempts.
+     */
+    public StoredImage readGarmentImageForAi(Long userId, String publicUrl) {
+        if (publicUrl == null || publicUrl.isBlank()) {
+            return null;
+        }
+        String cleanUrl = publicUrl.trim();
+        if (cleanUrl.startsWith("/uploads/user_" + userId + "/")) {
+            return readUserLocalUpload(userId, cleanUrl);
+        }
+        if (cleanUrl.startsWith("/alta/pieces/")) {
+            String filename = cleanUrl.substring("/alta/pieces/".length());
+            if (!filename.matches("^[a-zA-Z0-9._-]+$") || filename.contains("..")) {
+                return null;
+            }
+            Path[] candidateDirs = new Path[]{
+                    Paths.get(frontendPublicDir != null ? frontendPublicDir : "../frontend/public", "alta", "pieces"),
+                    Paths.get("frontend", "public", "alta", "pieces"),
+                    Paths.get("..", "frontend", "public", "alta", "pieces")
+            };
+            for (Path dir : candidateDirs) {
+                Path normalizedDir = dir.toAbsolutePath().normalize();
+                Path resolved = normalizedDir.resolve(filename).normalize();
+                if (!resolved.startsWith(normalizedDir) || !Files.exists(resolved) || !Files.isRegularFile(resolved)) {
+                    continue;
+                }
+                try {
+                    byte[] bytes = Files.readAllBytes(resolved);
+                    String ext = detectImageExtensionByMagicBytes(bytes);
+                    if (ext == null) continue;
+                    String mime = switch (ext) {
+                        case "png" -> "image/png";
+                        case "webp" -> "image/webp";
+                        default -> "image/jpeg";
+                    };
+                    return new StoredImage(cleanUrl, mime, bytes);
+                } catch (IOException ignored) {
+                    // Try next candidate directory
+                }
+            }
+        }
+        return null;
     }
 
     /**

@@ -79,6 +79,37 @@ public class OutfitDto {
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class VisualPieceFeatureVo {
+        private String slotKey;
+        private String slotLabel;
+        private Long itemId;
+        private String name;
+        private String imageUrl;
+        private String colorHex;
+        private String svgType;
+        private String zhSummary;
+        private String enPrompt;
+        private boolean visualGrounded;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TryOnVisualReportVo {
+        private boolean usedRealVlm;
+        private int referencedGarmentCount;
+        private boolean usedGarmentImagesInGen;
+        private String overallPalette;
+        private String bodyProfile;
+        private String sceneLabel;
+        private List<VisualPieceFeatureVo> pieces;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class TryOnResultVo {
         private Long planId;
         private String previewImageUrl;
@@ -88,6 +119,7 @@ public class OutfitDto {
         private String endpointUsed;
         private String promptUsed;
         private String notice;
+        private TryOnVisualReportVo visualReport;
     }
 
     @Data
@@ -110,6 +142,7 @@ public class OutfitDto {
         private String previewImageUrl;
         private String notice;
         private String errorMessage;
+        private TryOnVisualReportVo visualReport;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
     }

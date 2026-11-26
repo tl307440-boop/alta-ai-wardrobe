@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS `try_on_job` (
   `model_used` VARCHAR(100) DEFAULT NULL,
   `endpoint_used` VARCHAR(100) DEFAULT NULL,
   `prompt_used` TEXT DEFAULT NULL,
+  `visual_report` TEXT DEFAULT NULL,
   `preview_image_url` VARCHAR(500) DEFAULT NULL,
   `notice` VARCHAR(500) DEFAULT NULL,
   `error_message` VARCHAR(500) DEFAULT NULL,
@@ -182,3 +183,5 @@ CREATE TABLE IF NOT EXISTS `try_on_job` (
   CONSTRAINT `fk_tryon_job_user` FOREIGN KEY (`user_id`) REFERENCES `sys_user` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_tryon_job_plan` FOREIGN KEY (`plan_id`) REFERENCES `outfit_plan` (`id`) ON DELETE CASCADE
 );
+
+ALTER TABLE `try_on_job` ADD COLUMN IF NOT EXISTS `visual_report` TEXT DEFAULT NULL;

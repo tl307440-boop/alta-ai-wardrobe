@@ -193,9 +193,10 @@ function openExternalBuy(sim: InspoSimilarProduct, prefer?: 'taobao' | 'jd') {
                 <button
                   @click="addPieceToCloset"
                   :disabled="adding"
-                  class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 text-black text-[12.5px] font-medium transition disabled:opacity-50"
+                  class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 text-black text-[12.5px] font-medium transition disabled:opacity-55 disabled:cursor-not-allowed"
                 >
-                  <AppIcon name="plus" :size="13" />
+                  <AppIcon v-if="adding" name="loader" :size="13" class="animate-spin" />
+                  <AppIcon v-else name="plus" :size="13" />
                   {{ adding ? '录入中...' : '收入我的衣橱' }}
                 </button>
               </div>

@@ -28,6 +28,8 @@ const form = reactive({
 const newTag = ref('');
 const deleteConfirm = ref(false);
 const saving = ref(false);
+const deleting = ref(false);
+const styling = ref(false);
 const relatedHistory = ref<HistoryRecord[]>([]);
 const maskEditorOpen = ref(false);
 const savingCutout = ref(false);
@@ -137,25 +139,36 @@ async function saveChanges() {
 
 async function confirmDelete() {
   const item = wardrobeStore.drawerItem;
-  if (!item) return;
+  if (!item || deleting.value) return;
   const name = item.name;
+  deleting.value = true;
   try {
     await wardrobeStore.deleteItem(item.id);
     toast.show(`已删除「${name}」`);
   } catch (e: any) {
     toast.show(e.message || '删除失败');
+  } finally {
+    deleting.value = false;
   }
 }
 
 async function styleWithAnchor() {
   const item = wardrobeStore.drawerItem;
-  if (!item) return;
+  if (!item || styling.value) return;
+  styling.value = true;
   lookbookStore.triggerMode = 'anchor';
   lookbookStore.anchorItemId = item.id;
-  close();
-  router.push('/lookbook');
-  await lookbookStore.generateRecommendation({ triggerType: 'anchor_item', anchorItemId: item.id });
-  toast.show(`已围绕「${item.name}」生成专属搭配方案`);
+  toast.show(`正在围绕「${item.name}」生成专属搭配…`);
+  try {
+    await lookbookStore.generateRecommendation({ triggerType: 'anchor_item', anchorItemId: item.id });
+    close();
+    router.push('/lookbook');
+    toast.show(`已围绕「${item.name}」生成专属搭配方案`);
+  } catch (e: any) {
+    toast.show(e?.message || '生成搭配失败');
+  } finally {
+    styling.value = false;
+  }
 }
 
 function jumpToCalendar(date: string) {
@@ -243,10 +256,12 @@ function jumpToCalendar(date: string) {
 
           <button
             @click="styleWithAnchor"
-            class="w-full py-3 rounded-full bg-black hover:bg-[#262626] text-white text-[13.5px] font-medium shadow-sm transition flex items-center justify-center gap-2"
+            :disabled="styling"
+            class="w-full py-3 rounded-full bg-black hover:bg-[#262626] text-white text-[13.5px] font-medium shadow-sm transition flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <AppIcon name="sparkles" :size="15" />
-            以此单品为核心搭配
+            <AppIcon v-if="styling" name="loader" :size="15" class="animate-spin" />
+            <AppIcon v-else name="sparkles" :size="15" />
+            {{ styling ? '正在生成搭配…' : '以此单品为核心搭配' }}
           </button>
 
           <div class="space-y-3.5 pt-2 border-t border-black/[0.08]">
@@ -320,8 +335,9 @@ function jumpToCalendar(date: string) {
             <button
               @click="saveChanges"
               :disabled="saving"
-              class="w-full py-2.5 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition disabled:opacity-60"
+              class="w-full py-2.5 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition inline-flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
             >
+              <AppIcon v-if="saving" name="loader" :size="13" class="animate-spin" />
               {{ saving ? '保存中...' : '保存属性与价格' }}
             </button>
           </div>
@@ -359,9 +375,11 @@ function jumpToCalendar(date: string) {
               <div class="flex gap-2">
                 <button
                   @click="confirmDelete"
-                  class="flex-1 py-2 rounded-full bg-red-600 hover:bg-red-700 text-white text-[12px] font-medium transition"
+                  :disabled="deleting"
+                  class="flex-1 py-2 rounded-full bg-red-600 hover:bg-red-700 text-white text-[12px] font-medium transition inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
                 >
-                  确认移除
+                  <AppIcon v-if="deleting" name="loader" :size="12" class="animate-spin" />
+                  {{ deleting ? '移除中…' : '确认移除' }}
                 </button>
                 <button
                   @click="deleteConfirm = false"
