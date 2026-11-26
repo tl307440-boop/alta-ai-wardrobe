@@ -6,6 +6,7 @@ import com.wardrobe.security.UserContextHolder;
 import com.wardrobe.service.CommerceMatchService;
 import com.wardrobe.service.OutfitRecommendationService;
 import com.wardrobe.service.TryOnJobService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
@@ -54,16 +55,44 @@ public class OutfitController {
 
     @PostMapping("/outfit/plans/{id}/try-on")
     public Result<OutfitDto.TryOnResultVo> generateTryOn(@PathVariable Long id,
-                                                         @RequestBody(required = false) OutfitDto.TryOnRequest req) {
+                                                         @RequestBody(required = false) OutfitDto.TryOnRequest req,
+                                                         HttpServletRequest httpReq) {
         OutfitDto.TryOnRequest body = req != null ? req : new OutfitDto.TryOnRequest();
+        enrichClientOrigin(body, httpReq);
         return Result.ok(outfitService.generateTryOnPreview(UserContextHolder.getUserId(), id, body));
     }
 
     @PostMapping("/outfit/plans/{id}/try-on/jobs")
     public Result<OutfitDto.TryOnJobVo> submitTryOnJob(@PathVariable Long id,
-                                                       @RequestBody(required = false) OutfitDto.TryOnRequest req) {
+                                                       @RequestBody(required = false) OutfitDto.TryOnRequest req,
+                                                       HttpServletRequest httpReq) {
+        OutfitDto.TryOnRequest body = req != null ? req : new OutfitDto.TryOnRequest();
+        enrichClientOrigin(body, httpReq);
         return Result.ok("已提交后台生图任务",
-                tryOnJobService.submitJob(UserContextHolder.getUserId(), id, req));
+                tryOnJobService.submitJob(UserContextHolder.getUserId(), id, body));
+    }
+
+    private void enrichClientOrigin(OutfitDto.TryOnRequest body, HttpServletRequest httpReq) {
+        if (body == null || (body.getClientOrigin() != null && !body.getClientOrigin().isBlank()) || httpReq == null) {
+            return;
+        }
+        String proto = httpReq.getHeader("X-Forwarded-Proto");
+        if (proto == null || proto.isBlank()) {
+            proto = httpReq.getScheme();
+        }
+        String hostHeader = httpReq.getHeader("X-Forwarded-Host");
+        if (hostHeader == null || hostHeader.isBlank()) {
+            hostHeader = httpReq.getHeader("Host");
+        }
+        if (hostHeader != null && !hostHeader.isBlank()) {
+            String firstHost = hostHeader.split(",")[0].trim();
+            body.setClientOrigin(proto + "://" + firstHost);
+            return;
+        }
+        String serverName = httpReq.getServerName();
+        int port = httpReq.getServerPort();
+        boolean defaultPort = ("http".equalsIgnoreCase(proto) && port == 80) || ("https".equalsIgnoreCase(proto) && port == 443);
+        body.setClientOrigin(proto + "://" + serverName + (defaultPort ? "" : ":" + port));
     }
 
     @GetMapping("/outfit/try-on/jobs")

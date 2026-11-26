@@ -33,6 +33,14 @@ public class AiConfigDto {
         private String imageModel = "gpt-image-1";
 
         private Boolean enabled = true;
+
+        /** Dedicated Alibaba Bailian VTON config (optional; null preserves existing values) */
+        private Boolean vtonEnabled;
+        private String vtonProvider;
+        private String vtonModel;
+        private String vtonApiKey;
+        private Boolean clearVtonApiKey = false;
+        private String vtonPublicBaseUrl;
     }
 
     @Data
@@ -57,6 +65,13 @@ public class AiConfigDto {
         private String modelReferenceUrl;
         private boolean enabled;
         private boolean serverDefaultAvailable;
+        private boolean vtonEnabled;
+        private String vtonProvider;
+        private String vtonModel;
+        private boolean hasVtonApiKey;
+        private String vtonApiKeyMasked;
+        private boolean vtonKeyReusesMain;
+        private String vtonPublicBaseUrl;
         private LocalDateTime updatedAt;
     }
 

@@ -37,6 +37,13 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     modelReferenceUrl: null,
     enabled: true,
     serverDefaultAvailable: false,
+    vtonEnabled: false,
+    vtonProvider: 'dashscope',
+    vtonModel: 'aitryon-plus',
+    hasVtonApiKey: false,
+    vtonApiKeyMasked: '',
+    vtonKeyReusesMain: false,
+    vtonPublicBaseUrl: '',
   });
 
   const liveWeather = ref<WeatherInfo>({
@@ -151,6 +158,12 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     chatModel: string;
     imageModel?: string;
     enabled: boolean;
+    vtonEnabled?: boolean;
+    vtonProvider?: string;
+    vtonModel?: string;
+    vtonApiKey?: string;
+    clearVtonApiKey?: boolean;
+    vtonPublicBaseUrl?: string;
   }) {
     aiConfig.value = await aiConfigApi.save(payload);
     return aiConfig.value;

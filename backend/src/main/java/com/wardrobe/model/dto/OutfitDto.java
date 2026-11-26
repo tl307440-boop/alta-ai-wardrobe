@@ -73,6 +73,9 @@ public class OutfitDto {
         private String customPrompt;
         private Boolean useReferencePhoto = true;
         private String generationMode;    // auto | fast | chat_stream | hd
+        private String modelPreset;       // "user" | "/alta/models/female-1.jpg" | ...
+        private String upperGarmentPreference; // "auto" | "outerwear" | "top"
+        private String clientOrigin;      // browser origin e.g. http://47.111.163.151:8680
     }
 
     @Data
@@ -90,6 +93,7 @@ public class OutfitDto {
         private String zhSummary;
         private String enPrompt;
         private boolean visualGrounded;
+        private boolean vtonApplied;
     }
 
     @Data
@@ -100,6 +104,8 @@ public class OutfitDto {
         private boolean usedRealVlm;
         private int referencedGarmentCount;
         private boolean usedGarmentImagesInGen;
+        private String engineType; // dashscope_vton | general_image | editorial_fallback
+        private String vtonFallbackReason;
         private String overallPalette;
         private String bodyProfile;
         private String sceneLabel;

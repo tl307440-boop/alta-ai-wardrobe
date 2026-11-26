@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wardrobe.service.AiConfigService;
 import com.wardrobe.service.StorageService;
+import com.wardrobe.service.client.DashScopeVtonClient;
 import com.wardrobe.service.client.MultimodalLlmClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +47,9 @@ class AiWardrobeIntegrationTest {
 
     @MockBean
     private MultimodalLlmClient llmClient;
+
+    @MockBean
+    private DashScopeVtonClient dashScopeVtonClient;
 
     private String loginAsDemo() throws Exception {
         MvcResult res = mockMvc.perform(post("/api/auth/login")
@@ -871,5 +875,170 @@ class AiWardrobeIntegrationTest {
                                 "enabled", true
                         ))))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void testBailianVtonConfigAndVirtualTryOnAndFallback() throws Exception {
+        String username = "vton_user_" + System.currentTimeMillis();
+        MvcResult regRes = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", username,
+                                "password", "TestPass123!",
+                                "nickname", "VtonTester",
+                                "loadStarterPack", true
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode regData = objectMapper.readTree(regRes.getResponse().getContentAsString()).path("data");
+        String token = regData.path("token").asText();
+        long userId = regData.path("userInfo").path("id").asLong();
+
+        // 1. Reuse DashScope main key when dedicated VTON key is blank
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "dashscope",
+                                "baseUrl", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                                "apiKey", "sk-dashscope-main-1234567890",
+                                "visionModel", "qwen-vl-max",
+                                "chatModel", "qwen-plus",
+                                "enabled", true,
+                                "vtonEnabled", true,
+                                "vtonProvider", "dashscope",
+                                "vtonModel", "aitryon-plus",
+                                "vtonPublicBaseUrl", "http://47.111.163.151:8680"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.vtonEnabled").value(true))
+                .andExpect(jsonPath("$.data.vtonModel").value("aitryon-plus"))
+                .andExpect(jsonPath("$.data.hasVtonApiKey").value(false))
+                .andExpect(jsonPath("$.data.vtonKeyReusesMain").value(true))
+                .andExpect(jsonPath("$.data.vtonPublicBaseUrl").value("http://47.111.163.151:8680"));
+
+        // 2. Save dedicated encrypted VTON key and verify masking (plaintext never leaks)
+        String secretVtonKey = "sk-vton-dedicated-9988776655";
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "dashscope",
+                                "baseUrl", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                                "visionModel", "qwen-vl-max",
+                                "chatModel", "qwen-plus",
+                                "enabled", true,
+                                "vtonEnabled", true,
+                                "vtonModel", "aitryon",
+                                "vtonApiKey", secretVtonKey,
+                                "vtonPublicBaseUrl", "http://47.111.163.151:8680/"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.hasVtonApiKey").value(true))
+                .andExpect(jsonPath("$.data.vtonApiKeyMasked").isNotEmpty())
+                .andExpect(jsonPath("$.data.vtonKeyReusesMain").value(false))
+                .andExpect(jsonPath("$.data.vtonModel").value("aitryon"))
+                .andExpect(jsonPath("$.data.vtonPublicBaseUrl").value("http://47.111.163.151:8680"));
+
+        // 3. Create an outfit plan and run Bailian VTON try-on with starter pack (.webp garments -> cached .jpg!)
+        MvcResult recRes = mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "daily_weather",
+                                "weatherTemp", 18
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        long planId = objectMapper.readTree(recRes.getResponse().getContentAsString()).path("data").path("id").asLong();
+
+        when(dashScopeVtonClient.runVirtualTryOn(anyString(), anyString(), anyString(), any(), any()))
+                .thenAnswer(inv -> {
+                    String key = inv.getArgument(0);
+                    String model = inv.getArgument(1);
+                    String personUrl = inv.getArgument(2);
+                    String topUrl = inv.getArgument(3);
+                    String bottomUrl = inv.getArgument(4);
+                    assertThat(key).isEqualTo(secretVtonKey);
+                    assertThat(model).isEqualTo("aitryon");
+                    assertThat(personUrl).isEqualTo("http://47.111.163.151:8680/alta/models/female-1.jpg");
+                    // Starter pack pieces are .webp -> must be converted to DashScope-compatible cached .jpg
+                    assertThat(topUrl != null || bottomUrl != null).isTrue();
+                    if (topUrl != null) {
+                        assertThat(topUrl).startsWith("http://47.111.163.151:8680/uploads/user_" + userId + "/vton_cache_");
+                        assertThat(topUrl).endsWith(".jpg");
+                    }
+                    if (bottomUrl != null) {
+                        assertThat(bottomUrl).startsWith("http://47.111.163.151:8680/uploads/user_" + userId + "/vton_cache_");
+                        assertThat(bottomUrl).endsWith(".jpg");
+                    }
+                    byte[] fakeOut = new byte[160];
+                    System.arraycopy(VALID_PNG_BYTES, 0, fakeOut, 0, VALID_PNG_BYTES.length);
+                    return new DashScopeVtonClient.VtonResult(fakeOut, "https://oss.example/temp.png", "task-123", model);
+                });
+
+        mockMvc.perform(post("/api/outfit/plans/" + planId + "/try-on")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "modelPreset", "/alta/models/female-1.jpg",
+                                "upperGarmentPreference", "outerwear"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.usedRealImageModel").value(true))
+                .andExpect(jsonPath("$.data.endpointUsed").value("dashscope/aitryon"))
+                .andExpect(jsonPath("$.data.previewImageUrl").value(org.hamcrest.Matchers.startsWith("/uploads/user_" + userId + "/tryon_vton_")))
+                .andExpect(jsonPath("$.data.visualReport.engineType").value("dashscope_vton"))
+                .andExpect(jsonPath("$.data.visualReport.pieces[?(@.vtonApplied == true)]").isNotEmpty());
+
+        // 4. When DashScope throws an exception, seamlessly fall back (HTTP 200) with vtonFallbackReason
+        org.mockito.Mockito.doThrow(new IllegalStateException("Mock DashScope rate limit"))
+                .when(dashScopeVtonClient)
+                .runVirtualTryOn(anyString(), anyString(), anyString(), any(), any());
+        when(llmClient.generateEditorialTryOn(any(), anyString(), any(), anyString()))
+                .thenThrow(new IllegalStateException("Mock general fallback"));
+
+        mockMvc.perform(post("/api/outfit/plans/" + planId + "/try-on")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "modelPreset", "/alta/models/female-1.jpg"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.previewImageUrl").isNotEmpty())
+                .andExpect(jsonPath("$.data.visualReport.engineType").value("editorial_fallback"))
+                .andExpect(jsonPath("$.data.visualReport.vtonFallbackReason").isNotEmpty());
+
+        // 5. Loopback public base URL skips DashScope and degrades gracefully
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "dashscope",
+                                "baseUrl", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                                "visionModel", "qwen-vl-max",
+                                "chatModel", "qwen-plus",
+                                "enabled", true,
+                                "vtonEnabled", true,
+                                "vtonModel", "aitryon-plus",
+                                "vtonPublicBaseUrl", "http://127.0.0.1:5173"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/outfit/plans/" + planId + "/try-on")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "modelPreset", "/alta/models/male-1.jpg"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.visualReport.vtonFallbackReason").value(org.hamcrest.Matchers.containsString("回环")));
+
+        // 6. Security check: svg:// returns null cleanly, while cross-user uploads & traversal throw
+        assertThat(storageService.preparePublicVtonImageUrl(userId, "svg://tshirt", "http://47.111.163.151:8680")).isNull();
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () ->
+                storageService.preparePublicVtonImageUrl(userId, "/uploads/user_999999/secret.jpg", "http://47.111.163.151:8680"));
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () ->
+                storageService.preparePublicVtonImageUrl(userId, "/alta/pieces/../../etc/passwd", "http://47.111.163.151:8680"));
     }
 }

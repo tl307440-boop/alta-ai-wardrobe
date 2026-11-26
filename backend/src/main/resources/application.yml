@@ -28,6 +28,12 @@ app:
     secret: ${APP_CRYPTO_SECRET:AIWardrobeAesGcmKeyMasterSecret2026!}
   storage:
     upload-dir: ${APP_UPLOAD_DIR:./uploads}
+  public-base-url: ${APP_PUBLIC_BASE_URL:}
+  vton:
+    dashscope-base-url: ${APP_VTON_DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com}
+    internal-web-base-url: ${APP_INTERNAL_WEB_BASE_URL:http://web}
+    poll-interval-ms: 2500
+    max-wait-ms: 150000
   ai:
     connect-timeout-ms: 5000
     read-timeout-ms: 30000

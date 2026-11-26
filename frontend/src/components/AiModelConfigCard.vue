@@ -18,9 +18,15 @@ const form = reactive({
   chatModel: 'qwen-plus',
   imageModel: 'gpt-image-1',
   enabled: true,
+  vtonEnabled: false,
+  vtonProvider: 'dashscope',
+  vtonModel: 'aitryon-plus',
+  vtonApiKey: '',
+  vtonPublicBaseUrl: '',
 });
 
 const showKey = ref(false);
+const showVtonKey = ref(false);
 const saving = ref(false);
 const testing = ref(false);
 const uploadingRef = ref(false);
@@ -37,6 +43,10 @@ watch(
     form.chatModel = cfg.chatModel || 'qwen-plus';
     form.imageModel = cfg.imageModel || 'gpt-image-1';
     form.enabled = cfg.enabled;
+    form.vtonEnabled = Boolean(cfg.vtonEnabled);
+    form.vtonProvider = cfg.vtonProvider || 'dashscope';
+    form.vtonModel = cfg.vtonModel === 'aitryon' ? 'aitryon' : 'aitryon-plus';
+    form.vtonPublicBaseUrl = cfg.vtonPublicBaseUrl || '';
   },
   { immediate: true }
 );
@@ -48,6 +58,12 @@ function applyPreset(preset: (typeof AI_PROVIDER_PRESETS)[number]) {
   form.chatModel = preset.chatModel;
   form.imageModel = preset.imageModel || 'gpt-image-1';
   testResult.value = null;
+}
+
+function fillCurrentOrigin() {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    form.vtonPublicBaseUrl = window.location.origin;
+  }
 }
 
 async function handleSave() {
@@ -62,9 +78,15 @@ async function handleSave() {
       chatModel: form.chatModel,
       imageModel: form.imageModel.trim() || 'gpt-image-1',
       enabled: form.enabled,
+      vtonEnabled: form.vtonEnabled,
+      vtonProvider: 'dashscope',
+      vtonModel: form.vtonModel,
+      vtonApiKey: form.vtonApiKey.trim() || undefined,
+      vtonPublicBaseUrl: form.vtonPublicBaseUrl.trim(),
     });
     form.apiKey = '';
-    toast.show('模型 API Key 与生图模型已加密写入服务器并即时生效');
+    form.vtonApiKey = '';
+    toast.show('模型 API Key 与虚拟试衣配置已加密写入服务器并即时生效');
   } catch (e: any) {
     toast.show(e.message || '保存配置失败');
   } finally {
@@ -84,9 +106,38 @@ async function handleClearKey() {
       chatModel: form.chatModel,
       imageModel: form.imageModel.trim() || 'gpt-image-1',
       enabled: form.enabled,
+      vtonEnabled: form.vtonEnabled,
+      vtonProvider: 'dashscope',
+      vtonModel: form.vtonModel,
+      vtonPublicBaseUrl: form.vtonPublicBaseUrl.trim(),
     });
     form.apiKey = '';
-    toast.show('已清除服务端保存的 API Key，系统将使用本地智能降级引擎');
+    toast.show('已清除服务端保存的主 API Key，系统将使用本地智能降级引擎');
+  } catch (e: any) {
+    toast.show(e.message || '清除失败');
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function handleClearVtonKey() {
+  saving.value = true;
+  try {
+    await wardrobeStore.saveAiConfig({
+      providerName: form.providerName,
+      baseUrl: form.baseUrl,
+      visionModel: form.visionModel,
+      chatModel: form.chatModel,
+      imageModel: form.imageModel.trim() || 'gpt-image-1',
+      enabled: form.enabled,
+      vtonEnabled: form.vtonEnabled,
+      vtonProvider: 'dashscope',
+      vtonModel: form.vtonModel,
+      clearVtonApiKey: true,
+      vtonPublicBaseUrl: form.vtonPublicBaseUrl.trim(),
+    });
+    form.vtonApiKey = '';
+    toast.show('已清除独立 VTON API Key');
   } catch (e: any) {
     toast.show(e.message || '清除失败');
   } finally {
@@ -268,6 +319,139 @@ async function handleClearReference() {
             placeholder="gpt-image-1 / dall-e-3"
             class="w-full px-3 py-2 rounded-2xl bg-[#FAFAFA] border border-black/10 focus:border-black focus:bg-white outline-none text-[12px] font-mono"
           />
+        </div>
+      </div>
+
+      <!-- Dedicated Alibaba Bailian VTON Channel (Plan C) -->
+      <div class="p-4 rounded-2xl bg-[#FAFAFA] border border-black/[0.08] space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-[13px] font-semibold text-black">专业虚拟试衣通道 · 阿里云百炼 AI 试衣（VTON）</span>
+            <span
+              class="px-2 py-0.5 rounded-full text-[10.5px] font-mono border"
+              :class="
+                wardrobeStore.aiConfig.vtonEnabled &&
+                (wardrobeStore.aiConfig.hasVtonApiKey || wardrobeStore.aiConfig.vtonKeyReusesMain)
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-white text-[#666666] border-black/10'
+              "
+            >
+              {{
+                wardrobeStore.aiConfig.vtonEnabled &&
+                (wardrobeStore.aiConfig.hasVtonApiKey || wardrobeStore.aiConfig.vtonKeyReusesMain)
+                  ? `百炼 VTON 已激活 · ${wardrobeStore.aiConfig.vtonModel || 'aitryon-plus'}`
+                  : '未启用 · 使用通用生图'
+              }}
+            </span>
+          </div>
+          <label class="inline-flex items-center gap-1.5 text-[12px] font-medium text-black cursor-pointer">
+            <input v-model="form.vtonEnabled" type="checkbox" class="accent-black rounded" />
+            启用百炼 AI 试衣（1:1 真实上身）
+          </label>
+        </div>
+
+        <p class="text-[11.5px] text-[#666666] leading-relaxed">
+          使用阿里云百炼 <code class="font-mono">aitryon</code> / <code class="font-mono">aitryon-plus</code> 将衣橱真实单品像素级贴合到模特身上，不消耗本机算力；若接口失败或本地未映射公网地址，系统将自动无缝回退至上方通用生图模型。
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[11.5px] font-medium text-[#333333] mb-1">试衣模型版本</label>
+            <div class="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                @click="form.vtonModel = 'aitryon-plus'"
+                class="px-3 py-2 rounded-xl border text-[11.5px] font-medium text-left transition"
+                :class="
+                  form.vtonModel === 'aitryon-plus'
+                    ? 'bg-black text-white border-black'
+                    : 'bg-white text-[#333333] border-black/10 hover:border-black/30'
+                "
+              >
+                <div class="font-mono">aitryon-plus</div>
+                <div class="text-[10px] opacity-80">推荐 · 高清版</div>
+              </button>
+              <button
+                type="button"
+                @click="form.vtonModel = 'aitryon'"
+                class="px-3 py-2 rounded-xl border text-[11.5px] font-medium text-left transition"
+                :class="
+                  form.vtonModel === 'aitryon'
+                    ? 'bg-black text-white border-black'
+                    : 'bg-white text-[#333333] border-black/10 hover:border-black/30'
+                "
+              >
+                <div class="font-mono">aitryon</div>
+                <div class="text-[10px] opacity-80">极速基础版</div>
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11.5px] font-medium text-[#333333]">百炼 VTON API Key</label>
+              <div class="flex items-center gap-2">
+                <span v-if="wardrobeStore.aiConfig.hasVtonApiKey" class="font-mono text-[10.5px] text-emerald-700">
+                  已保存：{{ wardrobeStore.aiConfig.vtonApiKeyMasked }}
+                </span>
+                <span v-else-if="wardrobeStore.aiConfig.vtonKeyReusesMain" class="text-[10.5px] text-emerald-700">
+                  自动复用上方百炼主 Key
+                </span>
+                <button
+                  v-if="wardrobeStore.aiConfig.hasVtonApiKey"
+                  type="button"
+                  @click="handleClearVtonKey"
+                  :disabled="saving"
+                  class="text-[10.5px] text-red-600 hover:underline"
+                >
+                  清除
+                </button>
+              </div>
+            </div>
+            <div class="relative">
+              <input
+                v-model="form.vtonApiKey"
+                :type="showVtonKey ? 'text' : 'password'"
+                :placeholder="
+                  wardrobeStore.aiConfig.hasVtonApiKey
+                    ? '留空保留已保存 Key，输入新 Key 覆盖'
+                    : wardrobeStore.aiConfig.vtonKeyReusesMain
+                      ? '留空即自动复用上方主百炼 Key'
+                      : '输入阿里云百炼 sk-...（不填则无法调用 VTON）'
+                "
+                class="w-full pl-3.5 pr-9 py-2 rounded-xl bg-white border border-black/10 focus:border-black outline-none text-[12px] font-mono transition"
+              />
+              <button
+                type="button"
+                @click="showVtonKey = !showVtonKey"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-[#666666] hover:text-black"
+              >
+                <AppIcon :name="showVtonKey ? 'eye-off' : 'eye'" :size="14" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <label class="text-[11.5px] font-medium text-[#333333]">公网访问基地址（Public Base URL）</label>
+            <button
+              type="button"
+              @click="fillCurrentOrigin"
+              class="text-[11px] text-black hover:underline font-medium"
+            >
+              填入当前访问地址
+            </button>
+          </div>
+          <input
+            v-model.trim="form.vtonPublicBaseUrl"
+            type="url"
+            placeholder="例如 http://47.111.163.151:8680（留空则自动读取当前公网域名/IP）"
+            class="w-full px-3.5 py-2 rounded-xl bg-white border border-black/10 focus:border-black outline-none text-[12px] font-mono transition"
+          />
+          <p class="text-[10.5px] text-[#777777] mt-1">
+            百炼试衣需要从公网 HTTP/HTTPS 地址拉取模特照与衣物图；本地 <code class="font-mono">localhost / 127.0.0.1</code> 测试环境无法被阿里云访问时，系统将自动平滑回退到通用生图通道。
+          </p>
         </div>
       </div>
 

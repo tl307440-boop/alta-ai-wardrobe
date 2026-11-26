@@ -39,7 +39,13 @@ public class AiConfigService {
             String chatModel,
             String imageModel,
             String modelReferenceUrl,
-            boolean active
+            boolean active,
+            boolean vtonEnabled,
+            String vtonProvider,
+            String vtonModel,
+            String vtonApiKey,
+            String vtonPublicBaseUrl,
+            boolean vtonActive
     ) {}
 
     public AiConfigDto.ConfigVo getConfigVo(Long userId) {
@@ -47,6 +53,7 @@ public class AiConfigService {
                 new LambdaQueryWrapper<UserAiConfig>().eq(UserAiConfig::getUserId, userId));
         boolean serverDefaultAvailable = defaultApiKey != null && !defaultApiKey.isBlank();
         if (entity == null) {
+            boolean defaultIsDashScope = isDashScopeMain("dashscope", defaultBaseUrl);
             return AiConfigDto.ConfigVo.builder()
                     .providerName("dashscope")
                     .baseUrl(defaultBaseUrl)
@@ -58,12 +65,29 @@ public class AiConfigService {
                     .modelReferenceUrl(null)
                     .enabled(true)
                     .serverDefaultAvailable(serverDefaultAvailable)
+                    .vtonEnabled(false)
+                    .vtonProvider("dashscope")
+                    .vtonModel("aitryon-plus")
+                    .hasVtonApiKey(false)
+                    .vtonApiKeyMasked("")
+                    .vtonKeyReusesMain(defaultIsDashScope && serverDefaultAvailable)
+                    .vtonPublicBaseUrl("")
                     .updatedAt(null)
                     .build();
         }
         boolean hasKey = entity.getApiKeyEncrypted() != null && !entity.getApiKeyEncrypted().isBlank();
         String imgModel = (entity.getImageModel() != null && !entity.getImageModel().isBlank())
                 ? entity.getImageModel() : defaultImageModel;
+        boolean vtonEnabled = entity.getVtonEnabled() != null && entity.getVtonEnabled() == 1;
+        String vtonProvider = (entity.getVtonProvider() != null && !entity.getVtonProvider().isBlank())
+                ? entity.getVtonProvider() : "dashscope";
+        String vtonModel = "aitryon".equalsIgnoreCase(entity.getVtonModel()) ? "aitryon" : "aitryon-plus";
+        boolean hasVtonKey = entity.getVtonApiKeyEncrypted() != null && !entity.getVtonApiKeyEncrypted().isBlank();
+        boolean mainEnabled = entity.getEnabled() == null || entity.getEnabled() == 1;
+        boolean mainIsDashScope = isDashScopeMain(entity.getProviderName(), entity.getBaseUrl());
+        boolean mainAvailableForReuse = (mainEnabled && hasKey) || serverDefaultAvailable;
+        boolean vtonKeyReusesMain = !hasVtonKey && mainIsDashScope && mainAvailableForReuse;
+
         return AiConfigDto.ConfigVo.builder()
                 .providerName(entity.getProviderName())
                 .baseUrl(entity.getBaseUrl())
@@ -75,6 +99,13 @@ public class AiConfigService {
                 .modelReferenceUrl(entity.getModelReferenceUrl())
                 .enabled(entity.getEnabled() != null && entity.getEnabled() == 1)
                 .serverDefaultAvailable(serverDefaultAvailable)
+                .vtonEnabled(vtonEnabled)
+                .vtonProvider(vtonProvider)
+                .vtonModel(vtonModel)
+                .hasVtonApiKey(hasVtonKey)
+                .vtonApiKeyMasked(hasVtonKey ? entity.getVtonApiKeyMasked() : "")
+                .vtonKeyReusesMain(vtonKeyReusesMain)
+                .vtonPublicBaseUrl(entity.getVtonPublicBaseUrl() != null ? entity.getVtonPublicBaseUrl() : "")
                 .updatedAt(entity.getUpdatedAt())
                 .build();
     }
@@ -106,6 +137,34 @@ public class AiConfigService {
             entity.setApiKeyMasked(cryptoService.mask(rawKey));
         }
 
+        if (req.getVtonEnabled() != null) {
+            entity.setVtonEnabled(Boolean.TRUE.equals(req.getVtonEnabled()) ? 1 : 0);
+        } else if (isNew || entity.getVtonEnabled() == null) {
+            entity.setVtonEnabled(0);
+        }
+        if (req.getVtonProvider() != null && !req.getVtonProvider().isBlank()) {
+            entity.setVtonProvider("dashscope");
+        } else if (isNew || entity.getVtonProvider() == null || entity.getVtonProvider().isBlank()) {
+            entity.setVtonProvider("dashscope");
+        }
+        if (req.getVtonModel() != null && !req.getVtonModel().isBlank()) {
+            entity.setVtonModel("aitryon".equalsIgnoreCase(req.getVtonModel().trim()) ? "aitryon" : "aitryon-plus");
+        } else if (isNew || entity.getVtonModel() == null || entity.getVtonModel().isBlank()) {
+            entity.setVtonModel("aitryon-plus");
+        }
+        if (Boolean.TRUE.equals(req.getClearVtonApiKey())) {
+            entity.setVtonApiKeyEncrypted(null);
+            entity.setVtonApiKeyMasked(null);
+        } else if (req.getVtonApiKey() != null && !req.getVtonApiKey().isBlank()) {
+            String rawVtonKey = req.getVtonApiKey().trim();
+            entity.setVtonApiKeyEncrypted(cryptoService.encrypt(rawVtonKey));
+            entity.setVtonApiKeyMasked(cryptoService.mask(rawVtonKey));
+        }
+        if (req.getVtonPublicBaseUrl() != null) {
+            String pub = trimTrailingSlash(req.getVtonPublicBaseUrl());
+            entity.setVtonPublicBaseUrl(pub.isBlank() ? null : pub);
+        }
+
         entity.setUpdatedAt(LocalDateTime.now());
         if (isNew) {
             aiConfigMapper.insert(entity);
@@ -128,6 +187,9 @@ public class AiConfigService {
             entity.setChatModel(defaultChatModel);
             entity.setImageModel(defaultImageModel);
             entity.setEnabled(1);
+            entity.setVtonEnabled(0);
+            entity.setVtonProvider("dashscope");
+            entity.setVtonModel("aitryon-plus");
         }
         entity.setModelReferenceUrl(modelReferenceUrl);
         entity.setUpdatedAt(LocalDateTime.now());
@@ -150,41 +212,58 @@ public class AiConfigService {
             boolean enabled = entity.getEnabled() != null && entity.getEnabled() == 1;
             String imgModel = (entity.getImageModel() != null && !entity.getImageModel().isBlank())
                     ? entity.getImageModel() : defaultImageModel;
-            if (!enabled) {
-                return new ResolvedAiCredentials(entity.getBaseUrl(), null, entity.getVisionModel(),
-                        entity.getChatModel(), imgModel, entity.getModelReferenceUrl(), false);
+
+            String mainDecrypted = enabled ? cryptoService.decrypt(entity.getApiKeyEncrypted()) : null;
+            String effectiveMainKey = null;
+            String effectiveBaseUrl = trimTrailingSlash(entity.getBaseUrl());
+            String effectiveVision = entity.getVisionModel();
+            String effectiveChat = entity.getChatModel();
+            boolean mainActive = false;
+
+            if (enabled && mainDecrypted != null && !mainDecrypted.isBlank()) {
+                effectiveMainKey = mainDecrypted;
+                mainActive = true;
+            } else if (enabled && defaultApiKey != null && !defaultApiKey.isBlank()) {
+                effectiveMainKey = defaultApiKey.trim();
+                effectiveBaseUrl = trimTrailingSlash(defaultBaseUrl);
+                effectiveVision = defaultVisionModel;
+                effectiveChat = defaultChatModel;
+                mainActive = true;
             }
-            String decrypted = cryptoService.decrypt(entity.getApiKeyEncrypted());
-            if (decrypted != null && !decrypted.isBlank()) {
-                return new ResolvedAiCredentials(
-                        trimTrailingSlash(entity.getBaseUrl()),
-                        decrypted,
-                        entity.getVisionModel(),
-                        entity.getChatModel(),
-                        imgModel,
-                        entity.getModelReferenceUrl(),
-                        true
-                );
+
+            boolean vtonEnabled = entity.getVtonEnabled() != null && entity.getVtonEnabled() == 1;
+            String vtonProvider = (entity.getVtonProvider() != null && !entity.getVtonProvider().isBlank())
+                    ? entity.getVtonProvider() : "dashscope";
+            String vtonModel = "aitryon".equalsIgnoreCase(entity.getVtonModel()) ? "aitryon" : "aitryon-plus";
+            String vtonPub = trimTrailingSlash(entity.getVtonPublicBaseUrl());
+
+            String vtonDecrypted = cryptoService.decrypt(entity.getVtonApiKeyEncrypted());
+            String effectiveVtonKey = (vtonDecrypted != null && !vtonDecrypted.isBlank()) ? vtonDecrypted : null;
+            if (effectiveVtonKey == null && isDashScopeMain(entity.getProviderName(), entity.getBaseUrl())) {
+                if (effectiveMainKey != null && !effectiveMainKey.isBlank()) {
+                    effectiveVtonKey = effectiveMainKey;
+                } else if (defaultApiKey != null && !defaultApiKey.isBlank()) {
+                    effectiveVtonKey = defaultApiKey.trim();
+                }
             }
-            if (defaultApiKey != null && !defaultApiKey.isBlank()) {
-                return new ResolvedAiCredentials(
-                        trimTrailingSlash(defaultBaseUrl),
-                        defaultApiKey.trim(),
-                        defaultVisionModel,
-                        defaultChatModel,
-                        imgModel,
-                        entity.getModelReferenceUrl(),
-                        true
-                );
-            }
+            boolean vtonActive = vtonEnabled
+                    && "dashscope".equalsIgnoreCase(vtonProvider)
+                    && effectiveVtonKey != null && !effectiveVtonKey.isBlank();
+
             return new ResolvedAiCredentials(
-                    trimTrailingSlash(entity.getBaseUrl()),
-                    null,
-                    entity.getVisionModel(),
-                    entity.getChatModel(),
+                    effectiveBaseUrl,
+                    effectiveMainKey,
+                    effectiveVision,
+                    effectiveChat,
                     imgModel,
                     entity.getModelReferenceUrl(),
-                    false
+                    mainActive,
+                    vtonEnabled,
+                    vtonProvider,
+                    vtonModel,
+                    effectiveVtonKey,
+                    vtonPub.isBlank() ? null : vtonPub,
+                    vtonActive
             );
         }
         if (defaultApiKey != null && !defaultApiKey.isBlank()) {
@@ -195,7 +274,13 @@ public class AiConfigService {
                     defaultChatModel,
                     defaultImageModel,
                     null,
-                    true
+                    true,
+                    false,
+                    "dashscope",
+                    "aitryon-plus",
+                    null,
+                    null,
+                    false
             );
         }
         return new ResolvedAiCredentials(
@@ -205,8 +290,21 @@ public class AiConfigService {
                 defaultChatModel,
                 defaultImageModel,
                 null,
+                false,
+                false,
+                "dashscope",
+                "aitryon-plus",
+                null,
+                null,
                 false
         );
+    }
+
+    private boolean isDashScopeMain(String providerName, String baseUrl) {
+        if ("dashscope".equalsIgnoreCase(providerName)) {
+            return true;
+        }
+        return baseUrl != null && baseUrl.toLowerCase().contains("dashscope.aliyuncs.com");
     }
 
     private String trimTrailingSlash(String url) {

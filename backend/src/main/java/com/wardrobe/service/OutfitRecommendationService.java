@@ -16,10 +16,12 @@ import com.wardrobe.model.entity.OutfitHistory;
 import com.wardrobe.model.entity.OutfitPlan;
 import com.wardrobe.model.entity.UserPreference;
 import com.wardrobe.model.entity.WardrobeItem;
+import com.wardrobe.service.client.DashScopeVtonClient;
 import com.wardrobe.service.client.MultimodalLlmClient;
 import com.wardrobe.service.client.WeatherApiClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -54,9 +56,13 @@ public class OutfitRecommendationService {
     private final WeatherApiClient weatherApiClient;
     private final AiConfigService aiConfigService;
     private final MultimodalLlmClient llmClient;
+    private final DashScopeVtonClient dashScopeVtonClient;
     private final StorageService storageService;
     private final OutfitContactSheetService contactSheetService;
     private final JsonUtils jsonUtils;
+
+    @Value("${app.public-base-url:}")
+    private String configuredPublicBaseUrl;
 
     public OutfitDto.PlanVo recommend(Long userId, OutfitDto.RecommendRequest req) {
         UserPreference pref = preferenceService.getOrCreateEntity(userId);
@@ -1272,6 +1278,134 @@ public class OutfitRecommendationService {
                 : buildFallbackOverallPalette(allSlots);
         String bodyProfileZh = heightCm + "cm · " + bodyShape + " · " + colorSeason;
 
+        // 3.5 Plan C Primary Path: Alibaba Bailian Professional Virtual Try-On (aitryon / aitryon-plus)
+        String vtonFallbackReason = null;
+        String requestedPreset = req != null && req.getModelPreset() != null ? req.getModelPreset().trim() : "";
+        if (creds.vtonActive()) {
+            String effectivePublicBase = firstNonBlank(
+                    creds.vtonPublicBaseUrl(),
+                    configuredPublicBaseUrl,
+                    req != null ? req.getClientOrigin() : null
+            );
+            if (StorageService.isLoopbackUrl(effectivePublicBase)) {
+                vtonFallbackReason = "当前服务地址为本地回环或未配置公网 URL，阿里云百炼无法从公网拉取图片，请在「AI 模型配置」填写服务器公网地址（如 http://你的IP:8680）；已自动回退至通用生图通道";
+            } else {
+                try {
+                    String personAssetUrl;
+                    if (requestedPreset.startsWith("/alta/models/")) {
+                        personAssetUrl = requestedPreset;
+                    } else if (wantRef && creds.modelReferenceUrl() != null && !creds.modelReferenceUrl().isBlank()) {
+                        personAssetUrl = creds.modelReferenceUrl();
+                    } else {
+                        personAssetUrl = "/alta/models/female-1.jpg";
+                    }
+
+                    OutfitDto.PlanSlotVo onePieceSlot = allSlots.stream()
+                            .filter(this::isOnePieceGarment)
+                            .findFirst()
+                            .orElse(null);
+                    OutfitDto.PlanSlotVo topSlot;
+                    OutfitDto.PlanSlotVo bottomSlot;
+                    if (onePieceSlot != null) {
+                        topSlot = onePieceSlot;
+                        bottomSlot = null;
+                    } else {
+                        OutfitDto.PlanSlotVo outerwearSlot = findSlotByKey(allSlots, "outerwear");
+                        OutfitDto.PlanSlotVo topOnlySlot = findSlotByKey(allSlots, "top");
+                        OutfitDto.PlanSlotVo bottomOnlySlot = findSlotByKey(allSlots, "bottom");
+                        String upperPref = req != null && req.getUpperGarmentPreference() != null
+                                ? req.getUpperGarmentPreference().trim().toLowerCase(Locale.ROOT)
+                                : "auto";
+                        if ("top".equals(upperPref)) {
+                            topSlot = topOnlySlot != null ? topOnlySlot : outerwearSlot;
+                        } else {
+                            topSlot = outerwearSlot != null ? outerwearSlot : topOnlySlot;
+                        }
+                        bottomSlot = bottomOnlySlot;
+                    }
+
+                    String personPublicUrl = storageService.preparePublicVtonImageUrl(userId, personAssetUrl, effectivePublicBase);
+                    String topAssetUrl = resolveSlotAssetUrl(topSlot, wardrobeById);
+                    String bottomAssetUrl = resolveSlotAssetUrl(bottomSlot, wardrobeById);
+                    String topPublicUrl = topAssetUrl != null
+                            ? storageService.preparePublicVtonImageUrl(userId, topAssetUrl, effectivePublicBase)
+                            : null;
+                    String bottomPublicUrl = bottomAssetUrl != null
+                            ? storageService.preparePublicVtonImageUrl(userId, bottomAssetUrl, effectivePublicBase)
+                            : null;
+
+                    if (personPublicUrl == null || (topPublicUrl == null && bottomPublicUrl == null)) {
+                        vtonFallbackReason = "当前搭配缺少可送入百炼 VTON 的上装/下装单品图片或模特全身照，已自动回退至通用生图通道";
+                    } else {
+                        DashScopeVtonClient.VtonResult vtonRes = dashScopeVtonClient.runVirtualTryOn(
+                                creds.vtonApiKey(),
+                                creds.vtonModel(),
+                                personPublicUrl,
+                                topPublicUrl,
+                                bottomPublicUrl
+                        );
+                        StorageService.StoredImage saved = storageService.storeGeneratedImageBytes(
+                                userId, vtonRes.imageBytes(), "tryon_vton");
+                        plan.setTryOnImageUrl(saved.url());
+                        outfitPlanMapper.updateById(plan);
+
+                        String appliedTopKey = (topPublicUrl != null && topSlot != null) ? topSlot.getSlotKey() : null;
+                        String appliedBottomKey = (bottomPublicUrl != null && bottomSlot != null) ? bottomSlot.getSlotKey() : null;
+                        List<String> appliedLabels = new ArrayList<>();
+                        int appliedCount = 0;
+                        for (OutfitDto.VisualPieceFeatureVo pf : pieceFeatures) {
+                            boolean applied = Objects.equals(pf.getSlotKey(), appliedTopKey)
+                                    || Objects.equals(pf.getSlotKey(), appliedBottomKey);
+                            pf.setVtonApplied(applied);
+                            if (applied) {
+                                appliedCount++;
+                                appliedLabels.add(pf.getSlotLabel());
+                            }
+                        }
+
+                        OutfitDto.TryOnVisualReportVo vtonReport = OutfitDto.TryOnVisualReportVo.builder()
+                                .usedRealVlm(usedVlmVisualExtraction)
+                                .referencedGarmentCount(appliedCount)
+                                .usedGarmentImagesInGen(true)
+                                .engineType("dashscope_vton")
+                                .vtonFallbackReason(null)
+                                .overallPalette(overallPaletteZh)
+                                .bodyProfile(bodyProfileZh)
+                                .sceneLabel("阿里云百炼 VTON 棚拍实穿")
+                                .pieces(pieceFeatures)
+                                .build();
+
+                        String appliedSummary = appliedLabels.isEmpty() ? "上/下装" : String.join("、", appliedLabels);
+                        return OutfitDto.TryOnResultVo.builder()
+                                .planId(planId)
+                                .previewImageUrl(saved.url())
+                                .usedRealImageModel(true)
+                                .usedReferencePhoto(true)
+                                .modelUsed(vtonRes.modelUsed())
+                                .endpointUsed("dashscope/aitryon")
+                                .promptUsed("")
+                                .visualReport(vtonReport)
+                                .notice("已通过阿里云百炼专业试衣（" + vtonRes.modelUsed() + "）完成 1:1 实穿贴合（实穿：" + appliedSummary + "），效果图已永久保存至本地")
+                                .build();
+                    }
+                } catch (Exception ex) {
+                    log.warn("DashScope VTON try-on failed ({}), falling back to general image generation", ex.getMessage());
+                    String err = Objects.toString(ex.getMessage(), "未知错误");
+                    if (err.length() > 120) err = err.substring(0, 120) + "...";
+                    vtonFallbackReason = "百炼 VTON 调用异常（" + err + "），已自动回退至通用生图通道";
+                }
+            }
+        }
+
+        // If VTON fell back and user picked a standard model preset, attach that preset to general /images/edits too
+        if (!usedRefPhoto && requestedPreset.startsWith("/alta/models/")) {
+            StorageService.StoredImage presetImg = storageService.readGarmentImageForAi(userId, requestedPreset);
+            if (presetImg != null) {
+                refInputs.add(0, new MultimodalLlmClient.ReferenceImageInput("model_reference.jpg", presetImg.mimeType(), presetImg.bytes()));
+                usedRefPhoto = true;
+            }
+        }
+
         if (creds.active()) {
             try {
                 MultimodalLlmClient.GeneratedImageResult gen = llmClient.generateEditorialTryOn(
@@ -1295,6 +1429,8 @@ public class OutfitRecommendationService {
                         .usedRealVlm(usedVlmVisualExtraction)
                         .referencedGarmentCount(garmentImagesBySlot.size())
                         .usedGarmentImagesInGen(garmentsAppliedInGen)
+                        .engineType("general_image")
+                        .vtonFallbackReason(vtonFallbackReason)
                         .overallPalette(overallPaletteZh)
                         .bodyProfile(bodyProfileZh)
                         .sceneLabel(sceneLabelZh)
@@ -1310,6 +1446,9 @@ public class OutfitRecommendationService {
                             + creds.imageModel() + " · " + gen.endpointUsed() + "）";
                 } else {
                     noticeMsg = "已通过服务端生图接口（" + creds.imageModel() + " · " + gen.endpointUsed() + "）生成上身杂志预览图";
+                }
+                if (vtonFallbackReason != null && !vtonFallbackReason.isBlank()) {
+                    noticeMsg = vtonFallbackReason + "；" + noticeMsg;
                 }
 
                 return OutfitDto.TryOnResultVo.builder()
@@ -1332,10 +1471,15 @@ public class OutfitRecommendationService {
                 String hint = errMsg.contains("HTTP 524") || errMsg.contains("HTTP 504")
                         ? "上游反代/CDN 等待超时（" + errMsg + "）：生图实际耗时约 25s，超过了域名网关/CDN 的 15s 超时限制；建议在 Base URL 改用直连地址或调大反代超时时间。"
                         : "上游生图接口返回异常（" + errMsg + "），已平滑降级为匹配该色系的杂志上身示意样片";
+                if (vtonFallbackReason != null && !vtonFallbackReason.isBlank()) {
+                    hint = vtonFallbackReason + "；" + hint;
+                }
                 OutfitDto.TryOnVisualReportVo fallbackReport = OutfitDto.TryOnVisualReportVo.builder()
                         .usedRealVlm(usedVlmVisualExtraction)
                         .referencedGarmentCount(garmentImagesBySlot.size())
                         .usedGarmentImagesInGen(false)
+                        .engineType("editorial_fallback")
+                        .vtonFallbackReason(vtonFallbackReason)
                         .overallPalette(overallPaletteZh)
                         .bodyProfile(bodyProfileZh)
                         .sceneLabel(sceneLabelZh)
@@ -1363,11 +1507,17 @@ public class OutfitRecommendationService {
                 .usedRealVlm(false)
                 .referencedGarmentCount(garmentImagesBySlot.size())
                 .usedGarmentImagesInGen(false)
+                .engineType("editorial_fallback")
+                .vtonFallbackReason(vtonFallbackReason)
                 .overallPalette(overallPaletteZh)
                 .bodyProfile(bodyProfileZh)
                 .sceneLabel(sceneLabelZh)
                 .pieces(pieceFeatures)
                 .build();
+        String offlineNotice = "尚未配置支持生图的中转站 API Key，当前展示匹配本套色系与风格的杂志示意样片；前往「我的 → AI 配置」填好 Key 即可实时激活 VLM 视觉反推与真机生图";
+        if (vtonFallbackReason != null && !vtonFallbackReason.isBlank()) {
+            offlineNotice = vtonFallbackReason + "；" + offlineNotice;
+        }
         return OutfitDto.TryOnResultVo.builder()
                 .planId(planId)
                 .previewImageUrl(fallbackUrl)
@@ -1377,8 +1527,48 @@ public class OutfitRecommendationService {
                 .endpointUsed("editorial_fallback")
                 .promptUsed(prompt.toString())
                 .visualReport(offlineReport)
-                .notice("尚未配置支持生图的中转站 API Key，当前展示匹配本套色系与风格的杂志示意样片；前往「我的 → AI 配置」填好 Key 即可实时激活 VLM 视觉反推与真机生图")
+                .notice(offlineNotice)
                 .build();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
+    }
+
+    private OutfitDto.PlanSlotVo findSlotByKey(List<OutfitDto.PlanSlotVo> slots, String key) {
+        if (slots == null) return null;
+        return slots.stream()
+                .filter(s -> key.equals(s.getSlotKey()) && s.getItem() != null)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private boolean isOnePieceGarment(OutfitDto.PlanSlotVo slot) {
+        if (slot == null || slot.getItem() == null) return false;
+        String cat = Objects.toString(slot.getItem().getCategory(), "");
+        if ("dress".equalsIgnoreCase(cat)) return true;
+        String name = Objects.toString(slot.getItem().getName(), "");
+        return name.contains("连衣裙") || name.contains("连体裤") || name.contains("连体衣")
+                || name.contains("背带裤") || name.contains("背带裙") || name.contains("长裙套装");
+    }
+
+    private String resolveSlotAssetUrl(OutfitDto.PlanSlotVo slot, Map<Long, WardrobeItem> wardrobeById) {
+        if (slot == null || slot.getItem() == null) return null;
+        String url = slot.getItem().getProcessedImageUrl();
+        if (url != null && !url.isBlank() && !url.trim().startsWith("svg://")) return url;
+        if (slot.getItem().getId() != null) {
+            WardrobeItem entity = wardrobeById.get(slot.getItem().getId());
+            if (entity != null && entity.getOriginalImageUrl() != null && !entity.getOriginalImageUrl().isBlank()) {
+                return entity.getOriginalImageUrl();
+            }
+        }
+        return null;
     }
 
     private String buildFallbackZhSummary(OutfitDto.PlanSlotVo slot) {

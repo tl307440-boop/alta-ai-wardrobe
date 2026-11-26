@@ -26,6 +26,15 @@ public class UserAiConfig {
     private String imageModel;
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String modelReferenceUrl;
+    private Integer vtonEnabled;
+    private String vtonProvider;
+    private String vtonModel;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String vtonApiKeyEncrypted;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String vtonApiKeyMasked;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String vtonPublicBaseUrl;
     private Integer enabled;
     private LocalDateTime updatedAt;
 }

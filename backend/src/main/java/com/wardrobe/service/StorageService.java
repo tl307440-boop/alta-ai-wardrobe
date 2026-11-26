@@ -6,21 +6,44 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.Base64;
+import java.util.Iterator;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
 public class StorageService {
     private static final long MAX_BYTES = 10L * 1024 * 1024; // 10MB
+    private static final long VTON_MIN_BYTES = 5L * 1024;    // 5KB
+    private static final long VTON_MAX_BYTES = 5L * 1024 * 1024; // 5MB
 
     private final Path rootDir;
 
     @Value("${app.storage.frontend-public-dir:../frontend/public}")
     private String frontendPublicDir = "../frontend/public";
+
+    @Value("${app.vton.internal-web-base-url:http://web}")
+    private String internalWebBaseUrl = "http://web";
 
     public StorageService(@Value("${app.storage.upload-dir:./uploads}") String uploadDir) {
         this.rootDir = Paths.get(uploadDir).toAbsolutePath().normalize();
@@ -160,15 +183,18 @@ public class StorageService {
         if (cleanUrl.startsWith("/uploads/user_" + userId + "/")) {
             return readUserLocalUpload(userId, cleanUrl);
         }
-        if (cleanUrl.startsWith("/alta/pieces/")) {
-            String filename = cleanUrl.substring("/alta/pieces/".length());
+        if (cleanUrl.startsWith("/alta/pieces/") || cleanUrl.startsWith("/alta/models/")) {
+            boolean isModels = cleanUrl.startsWith("/alta/models/");
+            String prefix = isModels ? "/alta/models/" : "/alta/pieces/";
+            String subDir = isModels ? "models" : "pieces";
+            String filename = cleanUrl.substring(prefix.length());
             if (!filename.matches("^[a-zA-Z0-9._-]+$") || filename.contains("..")) {
                 return null;
             }
             Path[] candidateDirs = new Path[]{
-                    Paths.get(frontendPublicDir != null ? frontendPublicDir : "../frontend/public", "alta", "pieces"),
-                    Paths.get("frontend", "public", "alta", "pieces"),
-                    Paths.get("..", "frontend", "public", "alta", "pieces")
+                    Paths.get(frontendPublicDir != null ? frontendPublicDir : "../frontend/public", "alta", subDir),
+                    Paths.get("frontend", "public", "alta", subDir),
+                    Paths.get("..", "frontend", "public", "alta", subDir)
             };
             for (Path dir : candidateDirs) {
                 Path normalizedDir = dir.toAbsolutePath().normalize();
@@ -192,6 +218,212 @@ public class StorageService {
             }
         }
         return null;
+    }
+
+    public static boolean isLoopbackUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return true;
+        }
+        try {
+            URI uri = URI.create(url.trim());
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                return true;
+            }
+            String host = uri.getHost();
+            if (host == null || host.isBlank()) {
+                return true;
+            }
+            String lower = host.toLowerCase(Locale.ROOT);
+            if ("localhost".equals(lower) || "0.0.0.0".equals(lower)
+                    || "::1".equals(lower) || "[::1]".equals(lower) || lower.startsWith("127.")) {
+                return true;
+            }
+            return false;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    /**
+     * Resolves a DashScope-ready public HTTP(S) URL for VTON (JPG/PNG only, 5KB–5MB).
+     * Automatically converts .webp or out-of-spec user uploads into cached white-backdrop JPEGs under /uploads/user_{id}/.
+     */
+    public String preparePublicVtonImageUrl(Long userId, String assetUrl, String publicBaseUrl) {
+        if (assetUrl == null || assetUrl.isBlank()) {
+            return null;
+        }
+        if (isLoopbackUrl(publicBaseUrl)) {
+            throw new IllegalStateException("未配置公网访问基地址或当前为本地回环地址，阿里云百炼无法拉取图片");
+        }
+        String base = trimTrailingSlash(publicBaseUrl);
+        String cleanAsset = assetUrl.trim();
+        if (cleanAsset.startsWith("svg://")) {
+            return null;
+        }
+        if (cleanAsset.startsWith("http://") || cleanAsset.startsWith("https://")) {
+            return cleanAsset;
+        }
+        if (cleanAsset.contains("..") || cleanAsset.contains("?") || cleanAsset.contains("#")) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "非法的图片路径");
+        }
+        String userPrefix = "/uploads/user_" + userId + "/";
+        boolean isUserUpload = cleanAsset.startsWith(userPrefix);
+        boolean isAltaModel = cleanAsset.startsWith("/alta/models/");
+        boolean isAltaPiece = cleanAsset.startsWith("/alta/pieces/");
+        if (!isUserUpload && !isAltaModel && !isAltaPiece) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "无权访问跨用户或非授权图片路径");
+        }
+
+        if (isAltaModel) {
+            String filename = cleanAsset.substring("/alta/models/".length());
+            if (!filename.matches("^[a-zA-Z0-9._-]+$")) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "非法的模特资源文件名");
+            }
+            String lower = filename.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")) {
+                return base + cleanAsset;
+            }
+            StoredImage stored = readGarmentImageForAi(userId, cleanAsset);
+            byte[] rawBytes = stored != null ? stored.bytes() : fetchInternalAssetBytes(cleanAsset, base);
+            if (rawBytes == null || rawBytes.length < 12) {
+                return null;
+            }
+            return base + ensureVtonJpegCached(userId, cleanAsset, rawBytes);
+        }
+
+        if (isUserUpload) {
+            StoredImage stored = readUserLocalUpload(userId, cleanAsset);
+            if (stored == null) {
+                return null;
+            }
+            boolean dashscopeFormatOk = "image/jpeg".equals(stored.mimeType()) || "image/png".equals(stored.mimeType());
+            if (dashscopeFormatOk && stored.bytes().length >= VTON_MIN_BYTES && stored.bytes().length <= VTON_MAX_BYTES) {
+                return base + cleanAsset;
+            }
+            return base + ensureVtonJpegCached(userId, cleanAsset, stored.bytes());
+        }
+
+        // /alta/pieces/
+        String filename = cleanAsset.substring("/alta/pieces/".length());
+        if (!filename.matches("^[a-zA-Z0-9._-]+$")) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "非法的单品资源文件名");
+        }
+        String lower = filename.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")) {
+            return base + cleanAsset;
+        }
+        StoredImage stored = readGarmentImageForAi(userId, cleanAsset);
+        byte[] rawBytes = stored != null ? stored.bytes() : fetchInternalAssetBytes(cleanAsset, base);
+        if (rawBytes == null || rawBytes.length < 12) {
+            return null;
+        }
+        return base + ensureVtonJpegCached(userId, cleanAsset, rawBytes);
+    }
+
+    private byte[] fetchInternalAssetBytes(String safeRelativePath, String publicBase) {
+        String[] candidates = new String[]{
+                trimTrailingSlash(internalWebBaseUrl) + safeRelativePath,
+                trimTrailingSlash(publicBase) + safeRelativePath
+        };
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(4))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+        for (String url : candidates) {
+            if (url == null || !url.startsWith("http")) continue;
+            try {
+                HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                        .timeout(Duration.ofSeconds(8))
+                        .GET()
+                        .build();
+                HttpResponse<byte[]> res = client.send(req, HttpResponse.BodyHandlers.ofByteArray());
+                if (res.statusCode() >= 200 && res.statusCode() < 300 && res.body() != null && res.body().length > 12) {
+                    return res.body();
+                }
+            } catch (Exception ignored) {
+                // Try next candidate
+            }
+        }
+        return null;
+    }
+
+    public String ensureVtonJpegCached(Long userId, String cacheKey, byte[] rawBytes) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update((cacheKey + ":" + rawBytes.length).getBytes(StandardCharsets.UTF_8));
+            byte[] digest = md.digest();
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < 8; i++) {
+                hex.append(String.format("%02x", digest[i]));
+            }
+            Path userDir = rootDir.resolve("user_" + userId);
+            Files.createDirectories(userDir);
+            String filename = "vton_cache_" + hex + ".jpg";
+            Path target = userDir.resolve(filename);
+            if (Files.exists(target) && Files.size(target) >= VTON_MIN_BYTES) {
+                return "/uploads/user_" + userId + "/" + filename;
+            }
+
+            BufferedImage src = ImageIO.read(new ByteArrayInputStream(rawBytes));
+            if (src == null || src.getWidth() < 2 || src.getHeight() < 2) {
+                throw new IllegalStateException("无法解码待转换图片：" + cacheKey);
+            }
+
+            int srcW = src.getWidth();
+            int srcH = src.getHeight();
+            int maxDim = Math.max(srcW, srcH);
+            double scale = 1.0;
+            if (maxDim > 1360) {
+                scale = 1360.0 / maxDim;
+            } else if (maxDim < 512) {
+                scale = 512.0 / maxDim;
+            }
+            int drawW = Math.max(1, (int) Math.round(srcW * scale));
+            int drawH = Math.max(1, (int) Math.round(srcH * scale));
+            int pad = Math.max(20, (int) Math.round(Math.max(drawW, drawH) * 0.06));
+            int canvasW = Math.min(1536, Math.max(360, drawW + pad * 2));
+            int canvasH = Math.min(1536, Math.max(360, drawH + pad * 2));
+            int drawX = (canvasW - drawW) / 2;
+            int drawY = (canvasH - drawH) / 2;
+
+            BufferedImage canvas = new BufferedImage(canvasW, canvasH, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = canvas.createGraphics();
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, canvasW, canvasH);
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g.drawImage(src, drawX, drawY, drawW, drawH, null);
+            g.dispose();
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
+            ImageWriter writer = writers.next();
+            try (MemoryCacheImageOutputStream out = new MemoryCacheImageOutputStream(baos)) {
+                ImageWriteParam param = writer.getDefaultWriteParam();
+                param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                param.setCompressionQuality(0.92f);
+                writer.setOutput(out);
+                writer.write(null, new IIOImage(canvas, null, null), param);
+            } finally {
+                writer.dispose();
+            }
+            Files.write(target, baos.toByteArray());
+            return "/uploads/user_" + userId + "/" + filename;
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception e) {
+            throw new IllegalStateException("转换百炼 VTON 兼容 JPG 图片失败：" + e.getMessage(), e);
+        }
+    }
+
+    private String trimTrailingSlash(String url) {
+        if (url == null) return "";
+        String r = url.trim();
+        while (r.endsWith("/")) {
+            r = r.substring(0, r.length() - 1);
+        }
+        return r;
     }
 
     /**
