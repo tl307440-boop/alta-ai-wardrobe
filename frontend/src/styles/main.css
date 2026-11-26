@@ -81,6 +81,30 @@ body {
   animation: scanBeam 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
+@keyframes cutoutSweep {
+  0% {
+    transform: translateX(-140%) skewX(-24deg);
+  }
+  100% {
+    transform: translateX(240%) skewX(-24deg);
+  }
+}
+
+.cutout-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 55%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: cutoutSweep 1.25s ease-in-out infinite;
+  pointer-events: none;
+}
+
 @keyframes hotspotPulse {
   0% {
     transform: scale(1);

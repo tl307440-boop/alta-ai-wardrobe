@@ -73,11 +73,11 @@ function makeNodeKey(slot: PlanSlot, idx: number): string {
 
 function buildDefaultLayout(slots: PlanSlot[]): CollageNode[] {
   const categoryPresets: Record<string, { x: number; y: number; scale: number; rotation: number; zIndex: number }> = {
-    outerwear: { x: 26, y: 31, scale: 1.18, rotation: -5, zIndex: 4 },
-    top: { x: 54, y: 24, scale: 1.0, rotation: 2, zIndex: 2 },
-    bottom: { x: 49, y: 63, scale: 1.16, rotation: -1, zIndex: 3 },
-    shoes: { x: 75, y: 78, scale: 0.9, rotation: 6, zIndex: 5 },
-    accessory: { x: 78, y: 38, scale: 0.85, rotation: 8, zIndex: 6 },
+    outerwear: { x: 27, y: 36, scale: 1.14, rotation: -4, zIndex: 4 },
+    top: { x: 54, y: 27, scale: 0.98, rotation: 2, zIndex: 2 },
+    bottom: { x: 48, y: 65, scale: 1.12, rotation: -1, zIndex: 3 },
+    shoes: { x: 75, y: 76, scale: 0.88, rotation: 5, zIndex: 5 },
+    accessory: { x: 78, y: 40, scale: 0.82, rotation: 6, zIndex: 6 },
   };
   const usedCounts: Record<string, number> = {};
 
@@ -482,48 +482,8 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
 </script>
 
 <template>
-  <div class="space-y-3">
-    <!-- Top Canvas Control Strip -->
-    <div class="flex flex-wrap items-center justify-between gap-2 text-[12px]">
-      <div class="flex items-center gap-1.5 text-[#666666]">
-        <AppIcon name="move" :size="14" class="text-black" />
-        <span>按住衣物自由拖拽 · 点击选中后可缩放、旋转或调整叠穿层级</span>
-      </div>
-      <div class="flex items-center gap-1.5">
-        <button
-          type="button"
-          @click="resetAutoLayout"
-          class="px-3 py-1 rounded-full bg-white hover:bg-[#EBEBEB] border border-black/10 text-black font-medium transition"
-        >
-          自动排版
-        </button>
-        <button
-          type="button"
-          @click="handleSave"
-          :disabled="saving"
-          class="px-3 py-1 rounded-full text-[12px] font-medium transition flex items-center gap-1"
-          :class="
-            hasUnsavedChanges
-              ? 'bg-black text-white hover:bg-[#262626]'
-              : 'bg-white border border-black/15 text-black hover:bg-[#F5F5F5]'
-          "
-        >
-          <AppIcon name="check" :size="13" />
-          {{ saving ? '保存中...' : hasUnsavedChanges ? '保存排版' : '已同步' }}
-        </button>
-        <button
-          type="button"
-          @click="exportCollagePng"
-          :disabled="exporting"
-          class="px-3 py-1 rounded-full bg-white hover:bg-black hover:text-white border border-black/15 text-black font-medium transition flex items-center gap-1"
-        >
-          <AppIcon name="download" :size="13" />
-          {{ exporting ? '导出中...' : '导出 PNG' }}
-        </button>
-      </div>
-    </div>
-
-    <!-- Embedded Preview Stage -->
+  <div class="space-y-2.5">
+    <!-- Embedded Preview Stage with Minimal Floating Top Controls -->
     <div
       ref="canvasRef"
       @click.self="selectedKey = null"
@@ -531,17 +491,49 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
-      class="group relative w-full h-[460px] sm:h-[520px] rounded-3xl border border-black/[0.08] bg-white overflow-hidden select-none touch-none shadow-inner"
+      class="group relative w-full h-[450px] sm:h-[530px] rounded-2xl border border-black/[0.06] bg-[#FAFAFA] overflow-hidden select-none touch-none"
       style="
-        background-image: radial-gradient(rgba(0, 0, 0, 0.09) 1px, transparent 0);
+        background-image: radial-gradient(rgba(0, 0, 0, 0.085) 1px, transparent 0);
         background-size: 22px 22px;
       "
     >
-      <div class="pointer-events-none absolute top-3.5 left-4 text-[10px] font-mono uppercase tracking-[0.18em] text-black/30">
-        ALTA FLAT-LAY STUDIO · {{ nodes.length }} PIECES
+      <!-- Top-Left Minimal Floating Actions -->
+      <div class="absolute top-3 left-3 z-[40] flex items-center gap-1 p-1 rounded-full bg-white/92 backdrop-blur-md border border-black/[0.08] shadow-sm text-[11.5px]">
+        <button
+          type="button"
+          @click.stop="resetAutoLayout"
+          title="自动排版"
+          class="px-2.5 py-1 rounded-full hover:bg-[#F2F2F2] text-black font-medium transition"
+        >
+          重排
+        </button>
+        <button
+          type="button"
+          @click.stop="handleSave"
+          :disabled="saving"
+          title="保存排版"
+          class="px-2.5 py-1 rounded-full font-medium transition inline-flex items-center gap-1"
+          :class="
+            hasUnsavedChanges
+              ? 'bg-black text-white hover:bg-[#262626]'
+              : 'hover:bg-[#F2F2F2] text-[#555555]'
+          "
+        >
+          <AppIcon name="check" :size="12" />
+          {{ saving ? '保存中' : hasUnsavedChanges ? '保存' : '已同步' }}
+        </button>
+        <button
+          type="button"
+          @click.stop="exportCollagePng"
+          :disabled="exporting"
+          title="导出 1080×1350 高清拼贴图"
+          class="w-7 h-7 rounded-full hover:bg-[#F2F2F2] text-black flex items-center justify-center transition"
+        >
+          <AppIcon name="download" :size="13" />
+        </button>
       </div>
 
-      <!-- Single Clean Full-Screen Studio Entry Button -->
+      <!-- Top-Right Clean Full-Screen Studio Entry -->
       <button
         type="button"
         @click.stop="openStudio"
@@ -551,8 +543,12 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         全屏工作台
       </button>
 
-      <div class="pointer-events-none absolute bottom-3.5 right-4 text-[10px] font-mono text-black/30">
-        DRAG · SCALE · LAYER
+      <!-- Subtle Drag Hint (Only when nothing is selected) -->
+      <div
+        v-if="!selectedNode"
+        class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white/80 backdrop-blur-sm text-[11px] text-black/45 whitespace-nowrap"
+      >
+        拖拽单品自由排版 · 点击微调大小与层级
       </div>
 
       <!-- Draggable Garment & Stamp Nodes -->

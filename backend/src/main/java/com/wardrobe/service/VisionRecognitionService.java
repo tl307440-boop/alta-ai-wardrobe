@@ -191,6 +191,10 @@ public class VisionRecognitionService {
         MatchResult dup = findBestWardrobeMatch(userWardrobe,
                 new RawDetectedPiece(categoryToLabel(category), name, category, color, colorHex, svgType,
                         tags, name + " " + color, 50, 50));
+        // For wardrobe ingestion, only treat as a near-duplicate when silhouette AND color genuinely match (>= 92)
+        if (dup != null && dup.similarity < 92) {
+            dup = null;
+        }
 
         return VisionDto.DetectedItem.builder()
                 .name(name)

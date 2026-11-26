@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS `try_on_job` (
   `model_used` VARCHAR(100) DEFAULT NULL COMMENT '使用的生图模型',
   `endpoint_used` VARCHAR(100) DEFAULT NULL COMMENT '实际调用的上游端点',
   `prompt_used` TEXT DEFAULT NULL COMMENT '完整提示词',
+  `visual_report` TEXT DEFAULT NULL COMMENT 'VLM视觉特征解析报告JSON',
   `preview_image_url` VARCHAR(500) DEFAULT NULL COMMENT '生成图片持久化URL',
   `notice` VARCHAR(500) DEFAULT NULL COMMENT '结果提示文案',
   `error_message` VARCHAR(500) DEFAULT NULL COMMENT '失败原因说明',

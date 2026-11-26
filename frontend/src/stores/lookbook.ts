@@ -258,6 +258,7 @@ export const useLookbookStore = defineStore('lookbook', () => {
     refineInstruction?: string;
     basePlanId?: number;
     reviveIdle?: boolean;
+    excludeItemIds?: number[];
   }) {
     const wardrobeStore = useWardrobeStore();
     loading.value = true;
@@ -278,6 +279,7 @@ export const useLookbookStore = defineStore('lookbook', () => {
         weatherIcon: w.icon,
         weatherCity: w.city,
         reviveIdle: overrides?.reviveIdle ?? reviveIdle.value,
+        excludeItemIds: overrides?.excludeItemIds,
       });
       rememberPlan(plan);
       selectedTryOnJobId.value = null;
@@ -285,6 +287,20 @@ export const useLookbookStore = defineStore('lookbook', () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  /**
+   * Non-penalizing "换一换": generates a fresh weather-aware outfit avoiding current owned pieces
+   * without lowering the user's style preference weights.
+   */
+  async function shuffleOutfit() {
+    const excludeIds = (currentPlan.value?.slots || [])
+      .filter((s) => !s.missing && s.item?.id > 0)
+      .map((s) => s.item.id);
+    return generateRecommendation({
+      triggerType: 'daily_weather',
+      excludeItemIds: excludeIds.length > 0 ? excludeIds : undefined,
+    });
   }
 
   async function swapSlot(category: string, excludeItemIds: number[] = []) {
@@ -488,6 +504,7 @@ export const useLookbookStore = defineStore('lookbook', () => {
     restorePlanById,
     refreshTryOnJobs,
     generateRecommendation,
+    shuffleOutfit,
     swapSlot,
     saveCollageLayout,
     submitTryOnJob,

@@ -8,8 +8,10 @@ import { useToastStore } from '@/stores/toast';
 import { tryBrowserCutout, trySmartSingleCutout, type CutoutEngineMode } from '@/utils/cutout';
 import {
   disposeParsedClothesMap,
+  extractDiscoveredGarment,
   extractGarmentBySemanticMask,
   parseClothesSemanticMap,
+  planGarmentsFromSemanticMap,
   type ParsedClothesMap,
 } from '@/utils/segformer';
 import {
@@ -19,13 +21,12 @@ import {
   INSPIRATION_PRESETS,
   SCAN_OUTFIT_SAMPLE,
   SCAN_SAMPLES,
-  SCAN_STEPS,
   SEASON_OPTIONS,
   categoryLabel,
   platformBadgeClass,
 } from '@/utils/constants';
 import { cropImageRegion } from '@/utils/crop';
-import type { BoundingBox, DetectedItem, InspirationItemMatch } from '@/types';
+import type { BoundingBox, DetectedItem, InspirationItemMatch, ItemsDetectionResult } from '@/types';
 import AppIcon from '@/components/AppIcon.vue';
 import GarmentSvg from '@/components/GarmentSvg.vue';
 import GarmentVisual from '@/components/GarmentVisual.vue';
@@ -48,7 +49,7 @@ watch(
   }
 );
 
-// ==================== 模式 A：AI 识别录入（一图多件，勾选后批量入库） ====================
+// ==================== 模式 A：截图 / 穿搭照一键拆衣抠图分类（Acloset 风格） ====================
 interface SamplePiece {
   svgType: string;
   name: string;
@@ -88,11 +89,9 @@ interface ScanPiece {
   processedImageUrl: string;
   aiRawResult: string;
   duplicateOf: string | null;
-  /** 多件识别：该单品从整图中裁出的实物图（入库时上传），null 表示无位置框 */
   cropFile: File | null;
   cropDataUrl: string | null;
   bbox: BoundingBox | null;
-  /** 浏览器端抠图结果（可能失败，失败则用裁剪图入库） */
   cutoutFile: File | null;
   cutoutStatus: 'none' | 'pending' | 'running' | 'done' | 'failed';
   cutoutEngine: 'segformer' | 'general' | 'manual' | 'none';
@@ -132,12 +131,15 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
 const savingItem = ref(false);
 const cutoutEngineMode = ref<CutoutEngineMode>('auto');
+const detailViewMode = ref(false);
 
 const CUTOUT_ENGINE_OPTIONS: Array<{ key: CutoutEngineMode; label: string; hint: string }> = [
-  { key: 'auto', label: '自动', hint: '人像多件优先 SegFormer 拆衣，平铺单件走通用抠图' },
+  { key: 'auto', label: '自动', hint: '人像/截图优先本地 SegFormer 自动拆衣抠图，平铺单品走通用抠图' },
   { key: 'segformer', label: '人像拆衣', hint: '强制使用本地 SegFormer-B2-Clothes 18 类去人像拆衣' },
   { key: 'general', label: '单品抠图', hint: '强制使用通用前景抠图，适合平铺/挂拍单品' },
 ];
+
+type ScanPhase = 'idle' | 'bg' | 'category' | 'cutout' | 'finalize' | 'done';
 
 const maskEditor = reactive({
   open: false,
@@ -152,12 +154,27 @@ const itemScan = reactive({
   uploadedOriginalDataUrl: null as string | null,
   uploadedCutoutDataUrl: null as string | null,
   isScanning: false,
-  currentStep: -1,
+  phase: 'idle' as ScanPhase,
   done: false,
   viewMode: 'original' as 'original' | 'cutout',
   usedRealLlm: false,
   notice: '',
   pieces: [] as ScanPiece[],
+});
+
+const phaseBannerText = computed(() => {
+  switch (itemScan.phase) {
+    case 'bg':
+      return '正在移除背景…';
+    case 'category':
+      return '正在识别类别…';
+    case 'cutout':
+      return '正在逐件抠图分类…';
+    case 'finalize':
+      return '正在准备分析结果…';
+    default:
+      return '';
+  }
 });
 
 let pieceSeq = 0;
@@ -192,7 +209,6 @@ function makePiece(partial: Partial<ScanPiece> & Pick<ScanPiece, 'name' | 'categ
   };
 }
 
-// 每次重新识别都会递增，用于让上一轮仍在后台运行的抠图任务自行作废
 let scanRunId = 0;
 const cutoutWaiters = new Map<string, { promise: Promise<void>; resolve: () => void }>();
 
@@ -208,11 +224,43 @@ function settleCutout(uid: string) {
   cutoutWaiters.get(uid)?.resolve();
 }
 
-/**
- * 双引擎多件抠图：
- * - auto / segformer：先跑一次全图 SegFormer-B2-Clothes（18 类去人像/皮肤/头发），按每件单品的品类与位置框精准提取像素级透明单品；
- * - 未命中语义掩码或用户选择 general 时，对裁剪图回退到通用前景抠图 (@imgly/background-removal)。
- */
+function bboxIoU(a: BoundingBox | null, b: BoundingBox | null): number {
+  if (!a || !b) return 0;
+  const x0 = Math.max(a.x, b.x);
+  const y0 = Math.max(a.y, b.y);
+  const x1 = Math.min(a.x + a.w, b.x + b.w);
+  const y1 = Math.min(a.y + a.h, b.y + b.h);
+  const inter = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+  if (inter <= 0) return 0;
+  const union = a.w * a.h + b.w * b.h - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+function categoriesCompatible(segCat: string, vlmCat: string): boolean {
+  if (segCat === vlmCat) return true;
+  // SegFormer groups outerwear + top inside UPPER_CLOTHES
+  if ((segCat === 'top' || segCat === 'outerwear') && (vlmCat === 'top' || vlmCat === 'outerwear')) {
+    return true;
+  }
+  return false;
+}
+
+function categoryIconName(cat: string): string {
+  switch (cat) {
+    case 'outerwear':
+    case 'top':
+      return 'shirt';
+    case 'bottom':
+      return 'layers';
+    case 'shoes':
+      return 'sparkles';
+    case 'accessory':
+      return 'shopping-bag';
+    default:
+      return 'tag';
+  }
+}
+
 async function runPieceCutouts(runId: number, sourceFile: File | null = selectedFile.value) {
   const targets = itemScan.pieces.filter((p) => !p.saved && (p.cropFile || p.bbox));
   if (!targets.length) return;
@@ -296,7 +344,6 @@ async function switchCutoutEngine(mode: CutoutEngineMode) {
   cutoutWaiters.forEach((w) => w.resolve());
   cutoutWaiters.clear();
 
-  // Multi-item path: re-cut all unsaved pieces with the new engine
   if (itemScan.pieces.length >= 2) {
     itemScan.pieces.forEach((p) => {
       if (!p.saved && (p.cropFile || p.bbox)) {
@@ -309,7 +356,6 @@ async function switchCutoutEngine(mode: CutoutEngineMode) {
     return;
   }
 
-  // Single-item path: re-cut single garment in place
   const p = itemScan.pieces[0];
   if (p && !p.saved) {
     p.cutoutStatus = 'running';
@@ -386,7 +432,7 @@ function resetScanResult() {
   cutoutWaiters.forEach((w) => w.resolve());
   cutoutWaiters.clear();
   itemScan.done = false;
-  itemScan.currentStep = -1;
+  itemScan.phase = 'idle';
   itemScan.pieces = [];
   itemScan.notice = '';
   itemScan.usedRealLlm = false;
@@ -416,7 +462,6 @@ function handleFileUpload(e: Event) {
   const reader = new FileReader();
   reader.onload = (ev) => {
     itemScan.uploadedOriginalDataUrl = String(ev.target?.result || '');
-    // 上传即自动识别，不再需要额外点一次「开始」
     void startItemScan();
   };
   reader.readAsDataURL(file);
@@ -433,7 +478,7 @@ function selectScanSample(sample: ScanSample) {
 }
 
 function inferSeasons(category: string, name: string): string[] {
-  if (/羽绒|棉服|大衣|毛衣|加绒|靴/.test(name)) return ['秋', '冬'];
+  if (/羽绒|棉服|大衣|毛衣|马甲|加绒|靴/.test(name)) return ['秋', '冬'];
   if (/短袖|t恤|背心|短裤|半裙|凉鞋|吊带/i.test(name)) return ['春', '夏'];
   if (category === 'accessory') return [...SEASON_OPTIONS];
   return ['春', '秋'];
@@ -454,82 +499,286 @@ function pieceFromDetected(d: DetectedItem, sourceUrl: string): ScanPiece {
     originalImageUrl: sourceUrl,
     processedImageUrl: `svg://${svgType}`,
     aiRawResult: d.aiRawResult || '',
-    duplicateOf: d.similarWardrobeName ?? null,
+    duplicateOf: (d.similarity ?? 0) >= 92 ? (d.similarWardrobeName ?? null) : null,
     bbox: d.bbox ?? null,
   });
 }
 
-/** 按位置框把每件单品从整图裁出来；没有可用位置框的单品保留插画占位 */
-async function attachCrops(file: File, detected: DetectedItem[], pieces: ScanPiece[]) {
-  await Promise.all(
-    detected.map(async (d, i) => {
-      if (!d.bbox) return;
-      try {
-        const crop = await cropImageRegion(file, d.bbox, { name: `piece-${i + 1}` });
-        pieces[i].cropFile = crop.file;
-        pieces[i].cropDataUrl = crop.dataUrl;
-        pieces[i].processedImageUrl = crop.dataUrl;
-        pieces[i].cutoutStatus = 'pending';
-      } catch {
-        // 裁剪失败：该件保留插画占位，不影响其他单品
-      }
-    })
-  );
+function removeSelectedPieces() {
+  const toRemove = selectablePieces.value.filter((p) => p.selected);
+  if (!toRemove.length) return;
+  const removeIds = new Set(toRemove.map((p) => p.uid));
+  itemScan.pieces = itemScan.pieces.filter((p) => !removeIds.has(p.uid));
+  toast.show(`已移除 ${toRemove.length} 件单品`);
 }
 
+/**
+ * SegFormer-First + Parallel Cloud VLM Hybrid Pipeline (Acloset-style):
+ * 1) Runs local SegFormer-B2-Clothes immediately so ANY street-snap / phone screenshot splits into
+ *    independent cutout garments (top, pants/skirt, shoes, bag, hat, scarf) even with ZERO API Key!
+ * 2) Runs cloud VLM `detect-items` in parallel when configured; merges fine-grained names, outerwear/top
+ *    distinction, seasons, style tags, and any layered extras seamlessly onto the local cutouts.
+ * 3) Flat-lay single-garment photos (no human wearing & <= 1 semantic region) gracefully route through
+ *    @imgly general foreground cutout + single-item recognition.
+ */
 async function scanUploadedPhoto(file: File) {
-  await sleep(200);
-
-  // 1) 优先尝试一图多件：服务端多件识别返回每件属性 + 位置框，前端逐件裁剪并抠出实物图；识别出 ≥2 件才进入多件清单
+  const runId = scanRunId;
   const cfg = wardrobeStore.aiConfig;
   const llmReady = cfg.enabled && (cfg.hasApiKey || cfg.serverDefaultAvailable);
-  if (llmReady) {
-    itemScan.currentStep = 2;
-    const runId = scanRunId;
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('sourceType', 'photo');
-      const res = await visionApi.detectItems(fd);
-      const detected = res.usedRealLlm ? res.items || [] : [];
-      if (runId !== scanRunId) return;
-      if (detected.length >= 2) {
-        itemScan.currentStep = 3;
-        const pieces = detected.map((d) => pieceFromDetected(d, res.originalImageUrl || ''));
-        await attachCrops(file, detected, pieces);
-        if (runId !== scanRunId) return;
-        pieces.forEach((p) => {
-          if (p.cutoutStatus === 'pending') registerCutoutWaiter(p.uid);
-        });
-        itemScan.usedRealLlm = true;
-        itemScan.notice = `已自动识别出 ${detected.length} 件单品`;
-        itemScan.pieces = pieces;
-        itemScan.currentStep = 4;
-        itemScan.done = true;
-        void runPieceCutouts(runId);
-        return;
+
+  // Kick off cloud multi-garment VLM detection in parallel if active (never blocks local SegFormer!)
+  const vlmPromise: Promise<ItemsDetectionResult | null> = llmReady
+    ? (async () => {
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          fd.append('sourceType', 'photo');
+          return await visionApi.detectItems(fd);
+        } catch {
+          return null;
+        }
+      })()
+    : Promise.resolve(null);
+
+  // Phase 1: Local SegFormer semantic discovery (skip only if user explicitly forced 'general')
+  itemScan.phase = 'bg';
+  let parsed: ParsedClothesMap | null = null;
+  try {
+    if (cutoutEngineMode.value !== 'general') {
+      try {
+        parsed = await parseClothesSemanticMap(file, 45000);
+      } catch {
+        parsed = null;
       }
-    } catch {
-      // 拆分失败时回落到单件识别，不打断录入
+      if (runId !== scanRunId) return;
+
+      if (parsed) {
+        itemScan.phase = 'category';
+        const specs = planGarmentsFromSemanticMap(parsed);
+        const shouldUseSegMulti =
+          specs.length >= 2 ||
+          (specs.length === 1 && (parsed.hasHumanWearing || cutoutEngineMode.value === 'segformer'));
+
+        if (shouldUseSegMulti) {
+          // Immediately populate rows with cropped previews + diagonal shimmer sweep (like 2.mp4 00:07)
+          itemScan.phase = 'cutout';
+          const initialPieces: ScanPiece[] = [];
+          for (let i = 0; i < specs.length; i++) {
+            const spec = specs[i];
+            let cropPreviewUrl = `svg://${spec.svgType}`;
+            let cropFile: File | null = null;
+            let cropDataUrl: string | null = null;
+            try {
+              const c = await cropImageRegion(file, spec.bbox, { name: `pre-${spec.id}` });
+              cropPreviewUrl = c.dataUrl;
+              cropFile = c.file;
+              cropDataUrl = c.dataUrl;
+            } catch {
+              // Keep svg fallback while extracting
+            }
+            const piece = makePiece({
+              name: spec.baseName,
+              category: spec.category,
+              svgType: spec.svgType,
+              seasons: [...spec.defaultSeasons],
+              cropFile,
+              cropDataUrl,
+              processedImageUrl: cropPreviewUrl,
+              bbox: spec.bbox,
+              cutoutStatus: 'running',
+            });
+            registerCutoutWaiter(piece.uid);
+            initialPieces.push(piece);
+          }
+
+          if (runId !== scanRunId) return;
+          itemScan.pieces = initialPieces;
+
+          // Sequentially finalize each transparent cutout + real pixel dominant color
+          for (let i = 0; i < specs.length; i++) {
+            if (runId !== scanRunId) return;
+            const piece = initialPieces[i];
+            const extracted = await extractDiscoveredGarment(parsed, specs[i], piece.uid);
+            if (runId !== scanRunId) return;
+            if (extracted) {
+              piece.name = extracted.name;
+              piece.category = extracted.category;
+              piece.color = extracted.color;
+              piece.colorHex = extracted.colorHex;
+              piece.seasons = extracted.seasons;
+              piece.svgType = extracted.svgType;
+              piece.bbox = extracted.bbox;
+              piece.cropFile = extracted.cropFile;
+              piece.cropDataUrl = extracted.cropDataUrl;
+              piece.cutoutFile = extracted.cutoutFile;
+              piece.processedImageUrl = extracted.cutoutDataUrl;
+              piece.cutoutStatus = 'done';
+              piece.cutoutEngine = 'segformer';
+            } else {
+              piece.cutoutStatus = 'failed';
+            }
+            settleCutout(piece.uid);
+          }
+
+          // Phase 3: Merge parallel VLM semantic enrichment (finer names, outerwear vs top, style tags, layered pieces)
+          if (llmReady) {
+            itemScan.phase = 'finalize';
+            const vlmRes = await vlmPromise;
+            if (runId !== scanRunId) return;
+            const vlmItems = vlmRes?.usedRealLlm ? vlmRes.items || [] : [];
+            if (vlmItems.length > 0) {
+              const matchedPieceUids = new Set<string>();
+              const unmatchedVlm: DetectedItem[] = [];
+
+              for (const d of vlmItems) {
+                let bestPiece: ScanPiece | null = null;
+                let bestScore = -1;
+                for (const p of initialPieces) {
+                  if (matchedPieceUids.has(p.uid)) continue;
+                  const compat = categoriesCompatible(p.category, d.category);
+                  const iou = bboxIoU(p.bbox, d.bbox);
+                  const score = (compat ? 1.0 : 0.0) + iou * 2.0;
+                  if ((compat || iou > 0.25) && score > bestScore) {
+                    bestScore = score;
+                    bestPiece = p;
+                  }
+                }
+                if (bestPiece) {
+                  matchedPieceUids.add(bestPiece.uid);
+                  bestPiece.name = d.name || bestPiece.name;
+                  bestPiece.category = d.category || bestPiece.category;
+                  bestPiece.color = d.color || bestPiece.color;
+                  bestPiece.colorHex = d.colorHex || bestPiece.colorHex;
+                  bestPiece.seasons = d.seasons?.length ? [...d.seasons] : bestPiece.seasons;
+                  bestPiece.styleTags = d.styleTags?.length ? [...d.styleTags] : bestPiece.styleTags;
+                  bestPiece.material = d.material || bestPiece.material;
+                  bestPiece.svgType = d.svgType || bestPiece.svgType;
+                  bestPiece.aiRawResult = d.aiRawResult || '';
+                  bestPiece.originalImageUrl = vlmRes?.originalImageUrl || bestPiece.originalImageUrl;
+                  bestPiece.duplicateOf = (d.similarity ?? 0) >= 92 ? (d.similarWardrobeName ?? null) : null;
+                  if (bestPiece.duplicateOf) bestPiece.selected = false;
+                } else {
+                  unmatchedVlm.push(d);
+                }
+              }
+
+              // Add extra layered/accessory pieces detected by VLM (e.g. jacket over shirt)
+              for (const extra of unmatchedVlm) {
+                if (!extra.bbox) continue;
+                const extraPiece = pieceFromDetected(extra, vlmRes?.originalImageUrl || '');
+                try {
+                  const c = await cropImageRegion(file, extra.bbox, { name: `vlm-${extraPiece.uid}` });
+                  extraPiece.cropFile = c.file;
+                  extraPiece.cropDataUrl = c.dataUrl;
+                  extraPiece.processedImageUrl = c.dataUrl;
+                  extraPiece.cutoutStatus = 'running';
+                  registerCutoutWaiter(extraPiece.uid);
+                  itemScan.pieces.push(extraPiece);
+
+                  const segExtra = await extractGarmentBySemanticMask(parsed, {
+                    category: extraPiece.category,
+                    name: extraPiece.name,
+                    bbox: extraPiece.bbox,
+                    filePrefix: extraPiece.uid,
+                  });
+                  if (segExtra) {
+                    extraPiece.cutoutFile = segExtra.cutoutFile;
+                    extraPiece.processedImageUrl = segExtra.cutoutDataUrl;
+                    extraPiece.cutoutStatus = 'done';
+                    extraPiece.cutoutEngine = 'segformer';
+                  } else {
+                    const gen = await tryBrowserCutout(c.file, 20000);
+                    if (gen.cutoutFile && gen.cutoutDataUrl) {
+                      extraPiece.cutoutFile = gen.cutoutFile;
+                      extraPiece.processedImageUrl = gen.cutoutDataUrl;
+                      extraPiece.cutoutStatus = 'done';
+                      extraPiece.cutoutEngine = 'general';
+                    } else {
+                      extraPiece.cutoutStatus = 'failed';
+                    }
+                  }
+                  settleCutout(extraPiece.uid);
+                } catch {
+                  settleCutout(extraPiece.uid);
+                }
+              }
+
+              itemScan.usedRealLlm = true;
+              itemScan.notice = `已自动拆分抠图并精准识别 ${itemScan.pieces.length} 件单品`;
+            } else {
+              itemScan.usedRealLlm = false;
+              itemScan.notice = `已通过本地视觉分割自动拆出 ${itemScan.pieces.length} 件单品并完成抠图`;
+            }
+          } else {
+            itemScan.usedRealLlm = false;
+            itemScan.notice = `已通过本地视觉分割自动拆出 ${itemScan.pieces.length} 件单品并完成抠图`;
+          }
+
+          if (itemScan.pieces.length === 1 && itemScan.pieces[0].cutoutFile) {
+            itemScan.uploadedCutoutDataUrl = itemScan.pieces[0].processedImageUrl;
+            itemScan.viewMode = 'cutout';
+          }
+          itemScan.phase = 'done';
+          itemScan.done = true;
+          return;
+        }
+      }
+    }
+  } finally {
+    disposeParsedClothesMap(parsed);
+  }
+
+  // Fallback Path A: Cloud VLM detected >= 2 items (e.g. collage/flat-lay grid of multiple clothes without human)
+  if (llmReady) {
+    itemScan.phase = 'category';
+    const vlmRes = await vlmPromise;
+    if (runId !== scanRunId) return;
+    const detected = vlmRes?.usedRealLlm ? vlmRes.items || [] : [];
+    if (detected.length >= 2) {
+      itemScan.phase = 'cutout';
+      const pieces = detected.map((d) => pieceFromDetected(d, vlmRes?.originalImageUrl || ''));
+      await Promise.all(
+        detected.map(async (d, i) => {
+          if (!d.bbox) return;
+          try {
+            const crop = await cropImageRegion(file, d.bbox, { name: `piece-${i + 1}` });
+            pieces[i].cropFile = crop.file;
+            pieces[i].cropDataUrl = crop.dataUrl;
+            pieces[i].processedImageUrl = crop.dataUrl;
+            pieces[i].cutoutStatus = 'pending';
+            registerCutoutWaiter(pieces[i].uid);
+          } catch {
+            // Keep placeholder
+          }
+        })
+      );
+      if (runId !== scanRunId) return;
+      itemScan.usedRealLlm = true;
+      itemScan.notice = `已自动识别出 ${detected.length} 件单品`;
+      itemScan.pieces = pieces;
+      itemScan.phase = 'done';
+      itemScan.done = true;
+      void runPieceCutouts(runId, file);
+      return;
     }
   }
 
-  // 2) 单件识别：按当前引擎（自动 / 人像拆衣 / 单品抠图）浏览器端智能抠图 + 服务端多模态属性解析
-  itemScan.currentStep = 1;
+  // Fallback Path B: Single flat-lay / hanging garment (@imgly general cutout + recognize-item)
+  itemScan.phase = 'bg';
   const cutoutRes = await trySmartSingleCutout(file, cutoutEngineMode.value, 'top', '', 24000);
+  if (runId !== scanRunId) return;
   itemScan.uploadedCutoutDataUrl = cutoutRes.cutoutDataUrl;
 
-  itemScan.currentStep = 2;
+  itemScan.phase = 'finalize';
   const fd = new FormData();
   fd.append('file', file);
   if (cutoutRes.cutoutFile) fd.append('cutoutFile', cutoutRes.cutoutFile);
   fd.append('sourceType', 'photo');
   const result = await visionApi.recognizeItem(fd);
-  itemScan.currentStep = 3;
-  await sleep(200);
+  if (runId !== scanRunId) return;
 
   itemScan.usedRealLlm = result.usedRealLlm;
-  itemScan.notice = result.usedRealLlm ? result.notice || '' : '未配置模型，仅做基础解析（1 件）';
+  itemScan.notice = result.usedRealLlm ? result.notice || '' : '单件已自动抠图（未配置模型 API Key，可手动微调名称）';
   itemScan.pieces = [
     makePiece({
       name: result.name,
@@ -548,18 +797,20 @@ async function scanUploadedPhoto(file: File) {
       aiRawResult: result.aiRawResult || '',
     }),
   ];
-  itemScan.currentStep = 4;
+  itemScan.phase = 'done';
   itemScan.done = true;
   itemScan.viewMode = result.cutoutFallback || !cutoutRes.cutoutDataUrl ? 'original' : 'cutout';
 }
 
 async function scanSample(sample: ScanSample) {
-  for (let step = 0; step < 4; step++) {
-    itemScan.currentStep = step;
-    await sleep(260);
-  }
+  itemScan.phase = 'bg';
+  await sleep(280);
+  itemScan.phase = 'category';
+  await sleep(280);
+  itemScan.phase = 'finalize';
+  await sleep(280);
   itemScan.usedRealLlm = false;
-  itemScan.notice = sample.pieces.length > 1 ? `内置演示 · 已拆分出 ${sample.pieces.length} 件` : '内置演示';
+  itemScan.notice = sample.pieces.length > 1 ? `内置演示 · 已拆出 ${sample.pieces.length} 件单品` : '内置演示';
   itemScan.pieces = sample.pieces.map((p) =>
     makePiece({
       name: p.name,
@@ -572,9 +823,10 @@ async function scanSample(sample: ScanSample) {
       price: p.price ?? '',
       svgType: p.svgType,
       processedImageUrl: `svg://${p.svgType}`,
+      cutoutStatus: 'done',
     })
   );
-  itemScan.currentStep = 4;
+  itemScan.phase = 'done';
   itemScan.done = true;
 }
 
@@ -583,14 +835,14 @@ async function startItemScan() {
   itemScan.isScanning = true;
   itemScan.done = false;
   itemScan.pieces = [];
-  itemScan.currentStep = 0;
+  itemScan.phase = 'bg';
 
   try {
     if (selectedFile.value) await scanUploadedPhoto(selectedFile.value);
     else if (itemScan.sample) await scanSample(itemScan.sample);
   } catch (e: any) {
     toast.show(e.message || '识别失败，请检查图片格式或 API Key 配置');
-    itemScan.currentStep = -1;
+    itemScan.phase = 'idle';
   } finally {
     itemScan.isScanning = false;
   }
@@ -643,8 +895,9 @@ function setPieceColor(p: ScanPiece, sw: (typeof COLOR_SWATCHES)[number]) {
 function summaryLine(p: ScanPiece) {
   if (p.saved) return '已添加到衣橱';
   if (p.duplicateOf) return `衣橱已有相似「${p.duplicateOf}」，已默认不勾选`;
-  const parts = [p.seasons.join(' · '), ...p.styleTags.slice(0, 2)].filter(Boolean);
-  return parts.join(' · ') || '点击补充季节与风格';
+  const seasonText = p.seasons.map((s) => `${s}季`).join('、');
+  const tags = p.styleTags.filter((t) => t !== '日常百搭').slice(0, 2);
+  return [seasonText, ...tags].filter(Boolean).join(' · ') || '点击补充季节与风格';
 }
 
 async function saveSelectedPieces() {
@@ -657,7 +910,6 @@ async function saveSelectedPieces() {
   let imageFallbacks = 0;
   for (const p of targets) {
     try {
-      // 多件识别的单品：等该件抠图完成，再把裁剪图 / 抠图上传到自己的上传目录，入库使用服务端返回的 URL
       let originalUrl = p.originalImageUrl;
       let processedUrl = p.processedImageUrl;
       if (p.cropFile) {
@@ -671,7 +923,7 @@ async function saveSelectedPieces() {
           originalUrl = stored.originalImageUrl;
           processedUrl = stored.processedImageUrl;
         } catch {
-          imageFallbacks += 1; // 上传失败时仍可入库，退回整图 + 插画占位
+          imageFallbacks += 1;
         }
       }
       if (processedUrl.startsWith('data:')) processedUrl = `svg://${p.svgType}`;
@@ -713,6 +965,10 @@ async function saveSelectedPieces() {
 }
 
 function toggleExpand(p: ScanPiece) {
+  if (detailViewMode.value) {
+    p.moreOpen = !p.moreOpen;
+    return;
+  }
   const next = !p.expanded;
   itemScan.pieces.forEach((x) => {
     x.expanded = false;
@@ -799,7 +1055,6 @@ async function runInspirationAnalysis() {
   }
 }
 
-// 仅在进入「街拍找同款」时才请求拆解，避免录入页每次打开都多发一次请求
 let inspirationLoaded = false;
 function ensureInspirationLoaded() {
   if (inspirationLoaded) return;
@@ -821,7 +1076,7 @@ function sleep(ms: number) {
 </script>
 
 <template>
-  <section class="space-y-6">
+  <section class="space-y-5">
     <!-- 模式切换 -->
     <div class="flex justify-center">
       <div class="inline-flex p-1 rounded-full bg-[#F5F5F5]" role="tablist" aria-label="识别模式">
@@ -846,11 +1101,10 @@ function sleep(ms: number) {
       </div>
     </div>
 
-    <!-- ==================== 录入衣物：一图多件 ==================== -->
-    <div v-if="scanMode === 'item'" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <!-- 左：照片 -->
-      <div class="lg:col-span-5 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6 flex flex-col gap-4">
-        <!-- 抠图引擎切换 + 单件原图/抠图切换 -->
+    <!-- ==================== 录入衣物：截图自动拆衣抠图分类 ==================== -->
+    <div v-if="scanMode === 'item'" class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      <!-- 左：原图/上传区 -->
+      <div class="lg:col-span-5 bg-white rounded-3xl border border-black/[0.08] p-5 flex flex-col gap-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div
             class="inline-flex p-0.5 rounded-full bg-[#F5F5F5] text-[11.5px]"
@@ -871,12 +1125,9 @@ function sleep(ms: number) {
           </div>
 
           <div v-if="itemScan.done && itemScan.uploadedCutoutDataUrl" class="flex items-center gap-1.5">
-            <div
-              class="inline-flex p-0.5 rounded-full bg-[#F5F5F5] text-[11.5px]"
-              role="group"
-              aria-label="预览方式"
-            >
+            <div class="inline-flex p-0.5 rounded-full bg-[#F5F5F5] text-[11.5px]">
               <button
+                type="button"
                 @click="itemScan.viewMode = 'original'"
                 class="px-2.5 py-1 rounded-full font-medium transition"
                 :class="itemScan.viewMode === 'original' ? 'bg-black text-white' : 'text-[#666666]'"
@@ -884,6 +1135,7 @@ function sleep(ms: number) {
                 原图
               </button>
               <button
+                type="button"
                 @click="itemScan.viewMode = 'cutout'"
                 class="px-2.5 py-1 rounded-full font-medium transition"
                 :class="itemScan.viewMode === 'cutout' ? 'bg-black text-white' : 'text-[#666666]'"
@@ -891,21 +1143,13 @@ function sleep(ms: number) {
                 抠图
               </button>
             </div>
-            <button
-              v-if="itemScan.pieces.length === 1 && !itemScan.pieces[0].saved"
-              type="button"
-              @click="openMaskEditorForPiece(itemScan.pieces[0])"
-              class="px-2.5 py-1 rounded-full border border-black/15 hover:border-black text-[11.5px] font-medium text-black transition"
-            >
-              精修
-            </button>
           </div>
         </div>
 
         <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleFileUpload" />
 
         <div
-          class="relative rounded-2xl overflow-hidden aspect-[4/3] lg:aspect-square flex items-center justify-center"
+          class="relative rounded-2xl overflow-hidden aspect-[4/3] lg:aspect-[4/4.6] flex items-center justify-center"
           :class="
             hasSource
               ? itemScan.done && itemScan.viewMode === 'cutout'
@@ -923,9 +1167,11 @@ function sleep(ms: number) {
             <span class="w-12 h-12 rounded-full bg-white border border-black/[0.08] flex items-center justify-center mb-3 text-black">
               <AppIcon name="upload" :size="20" />
             </span>
-            <span class="text-[14px] font-medium text-black">上传衣物或整套穿搭照片</span>
-            <span class="text-[12px] text-[#666666] mt-1">AI 自动识别并拆分上衣、裤子、鞋等单品</span>
-            <span class="mt-4 px-5 py-2 rounded-full bg-black text-white text-[13px] font-medium">选择照片</span>
+            <span class="text-[14.5px] font-semibold text-black">上传任意穿搭截图或衣物照片</span>
+            <span class="text-[12px] text-[#666666] mt-1.5 max-w-[240px] leading-relaxed">
+              自动去除背景与人像，把上衣、裤子、鞋子、包袋逐件抠出并分类
+            </span>
+            <span class="mt-4 px-5 py-2 rounded-full bg-black text-white text-[13px] font-medium">选择照片 / 截图</span>
           </button>
 
           <template v-else>
@@ -954,29 +1200,31 @@ function sleep(ms: number) {
               </div>
             </div>
 
-            <div v-if="itemScan.isScanning" class="absolute inset-0 z-20 bg-white/40 backdrop-blur-[1px] overflow-hidden">
-              <div class="scan-beam w-full h-16 bg-gradient-to-b from-transparent via-black/10 to-black/30 border-b-2 border-black" />
+            <!-- Scanning Overlay -->
+            <div v-if="itemScan.isScanning" class="absolute inset-0 z-20 bg-white/35 backdrop-blur-[1px] overflow-hidden">
+              <div class="scan-beam w-full h-16 bg-gradient-to-b from-transparent via-black/10 to-black/25 border-b-2 border-black" />
               <div
-                class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-black text-white text-[12px] font-mono whitespace-nowrap"
+                class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-black text-white text-[12px] font-medium whitespace-nowrap inline-flex items-center gap-1.5 shadow-float"
                 role="status"
                 aria-live="polite"
               >
-                {{ SCAN_STEPS[itemScan.currentStep] || '处理中' }}…
+                <AppIcon :name="itemScan.phase === 'category' ? 'tag' : 'scissors'" :size="13" />
+                {{ phaseBannerText }}
               </div>
             </div>
           </template>
         </div>
 
-        <!-- 示例：仅在还没上传真实照片时出现，点选即自动识别 -->
+        <!-- 示例：仅在未上传照片时显示 -->
         <div v-if="!itemScan.uploadedOriginalDataUrl" class="space-y-2">
-          <span class="block text-[12px] text-[#666666]">试试示例</span>
+          <span class="block text-[12px] text-[#666666]">试试内置示例</span>
           <div class="flex flex-wrap gap-2">
             <button
               v-for="s in SAMPLES"
               :key="s.id"
+              type="button"
               @click="selectScanSample(s)"
               :disabled="itemScan.isScanning"
-              :aria-pressed="itemScan.sample?.id === s.id"
               class="px-3.5 py-1.5 rounded-full border text-[12px] font-medium transition disabled:opacity-50"
               :class="
                 itemScan.sample?.id === s.id
@@ -989,9 +1237,9 @@ function sleep(ms: number) {
           </div>
         </div>
 
-        <!-- 次级操作：主按钮只留给右侧「添加到衣橱」 -->
         <div v-if="hasSource && !itemScan.isScanning" class="flex items-center gap-2">
           <button
+            type="button"
             @click="startItemScan"
             class="flex-1 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] text-black text-[13px] font-medium transition flex items-center justify-center gap-1.5"
           >
@@ -999,75 +1247,135 @@ function sleep(ms: number) {
             重新识别
           </button>
           <button
+            type="button"
             @click="triggerFileUpload"
             class="flex-1 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-[#EBEBEB] text-black text-[13px] font-medium transition flex items-center justify-center gap-1.5"
           >
             <AppIcon name="upload" :size="14" />
-            {{ itemScan.uploadedOriginalDataUrl ? '更换照片' : '上传照片' }}
+            {{ itemScan.uploadedOriginalDataUrl ? '换一张截图' : '上传照片' }}
           </button>
         </div>
       </div>
 
-      <!-- 右：识别结果清单 -->
-      <div class="lg:col-span-7 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6 flex flex-col">
-        <div class="flex items-center justify-between gap-3">
-          <div class="flex items-baseline gap-2">
-            <h3 class="text-[16px] font-semibold text-black">识别结果</h3>
-            <span v-if="itemScan.done" class="font-mono text-[12px] text-[#666666]">共 {{ itemScan.pieces.length }} 件</span>
+      <!-- 右：Acloset 风格自动拆件抠图清单 -->
+      <div class="lg:col-span-7 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6 flex flex-col min-h-[420px]">
+        <!-- Top Header: Status or Result Count + Detail View Toggle -->
+        <div class="flex items-center justify-between gap-3 pb-3 border-b border-black/[0.06]">
+          <div class="flex items-center gap-2 min-w-0">
+            <template v-if="itemScan.isScanning">
+              <AppIcon
+                :name="itemScan.phase === 'category' ? 'tag' : itemScan.phase === 'finalize' ? 'sparkles' : 'scissors'"
+                :size="16"
+                class="text-black shrink-0"
+              />
+              <h3 class="text-[15.5px] font-semibold text-black truncate">{{ phaseBannerText }}</h3>
+            </template>
+            <template v-else>
+              <h3 class="text-[16px] font-semibold text-black">识别结果</h3>
+              <span v-if="itemScan.done" class="font-mono text-[12px] text-[#666666]">
+                共 {{ itemScan.pieces.length }} 件
+              </span>
+            </template>
           </div>
+
           <button
-            v-if="itemScan.done && selectablePieces.length > 1"
-            @click="toggleAll"
-            class="text-[12.5px] font-medium text-black"
+            v-if="itemScan.done && itemScan.pieces.length > 0"
+            type="button"
+            @click="detailViewMode = !detailViewMode"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[12px] font-medium transition shrink-0"
+            :class="
+              detailViewMode
+                ? 'bg-black text-white border-black'
+                : 'bg-white text-black border-black/[0.12] hover:border-black'
+            "
           >
-            {{ allSelected ? '取消全选' : '全选' }}
+            <AppIcon :name="detailViewMode ? 'list' : 'layout-grid'" :size="13" />
+            {{ detailViewMode ? '简洁视图' : '详细视图' }}
           </button>
         </div>
 
-        <p v-if="itemScan.done && itemScan.notice" class="mt-2 text-[12px] leading-relaxed text-[#666666]">
+        <!-- Select All / Delete Bar (Matches 2.mp4 00:19) -->
+        <div
+          v-if="itemScan.done && selectablePieces.length > 0"
+          class="flex items-center justify-between py-2.5 text-[12.5px] border-b border-black/[0.04]"
+        >
+          <button
+            type="button"
+            @click="toggleAll"
+            class="inline-flex items-center gap-2 text-black font-medium"
+          >
+            <span
+              class="w-4.5 h-4.5 w-[18px] h-[18px] rounded-[5px] border flex items-center justify-center transition"
+              :class="allSelected ? 'bg-black border-black text-white' : 'bg-white border-black/30'"
+            >
+              <AppIcon v-if="allSelected" name="check" :size="11" />
+            </span>
+            全选
+          </button>
+
+          <button
+            type="button"
+            @click="removeSelectedPieces"
+            :disabled="selectedCount === 0"
+            class="text-[#666666] hover:text-black disabled:opacity-35 transition"
+          >
+            删除
+          </button>
+        </div>
+
+        <!-- Subtle Notice Line -->
+        <p v-if="itemScan.done && itemScan.notice" class="mt-2.5 text-[12px] leading-relaxed text-[#666666]">
           {{ itemScan.notice }}
           <button
-            v-if="!itemScan.usedRealLlm"
+            v-if="!itemScan.usedRealLlm && itemScan.uploadedOriginalDataUrl"
+            type="button"
             @click="router.push({ path: '/profile', query: { tab: 'settings', panel: 'ai' } })"
             class="ml-1 font-medium text-black underline underline-offset-4"
           >
-            配置 API Key 以识别真实照片
+            配置 API Key 升级精细命名
           </button>
         </p>
 
-        <!-- 空态 -->
+        <!-- Empty State -->
         <div
-          v-if="!itemScan.done && !itemScan.isScanning"
-          class="mt-4 flex-1 min-h-[260px] rounded-2xl bg-[#FAFAFA] border border-dashed border-black/[0.16] flex flex-col items-center justify-center text-center px-6"
+          v-if="!itemScan.done && !itemScan.isScanning && itemScan.pieces.length === 0"
+          class="mt-4 flex-1 min-h-[260px] rounded-2xl bg-[#FAFAFA] border border-dashed border-black/[0.14] flex flex-col items-center justify-center text-center px-6"
         >
-          <AppIcon name="shirt" :size="26" class="text-black/30 mb-2" />
-          <p class="text-[13.5px] font-medium text-black">识别出的单品会出现在这里</p>
+          <AppIcon name="scissors" :size="24" class="text-black/30 mb-2.5" />
+          <p class="text-[13.5px] font-medium text-black">上传截图后，衣服 / 裤子 / 鞋子会自动拆出在这里</p>
+          <p class="text-[12px] text-[#777777] mt-1">支持直接相册截屏、小红书穿搭图或单品平铺图</p>
         </div>
 
-        <!-- 识别中骨架 -->
-        <ul v-else-if="itemScan.isScanning" class="mt-4 space-y-4 animate-pulse" aria-busy="true">
-          <li v-for="n in 3" :key="n" class="flex items-center gap-3">
-            <span class="w-6 h-6 rounded-full bg-[#EDEDED]" />
-            <span class="w-14 h-14 rounded-xl bg-[#EDEDED]" />
+        <!-- Initial Skeleton (Before SegFormer finishes discovering pieces) -->
+        <ul
+          v-else-if="itemScan.isScanning && itemScan.pieces.length === 0"
+          class="mt-4 space-y-4"
+          aria-busy="true"
+        >
+          <li v-for="n in 3" :key="n" class="flex items-center gap-3.5 animate-pulse">
+            <span class="w-5 h-5 rounded-md bg-[#EDEDED]" />
+            <span class="relative w-16 h-16 rounded-2xl bg-[#EDEDED] overflow-hidden cutout-shimmer" />
             <span class="flex-1 space-y-2">
-              <span class="block h-3.5 w-2/3 rounded bg-[#EDEDED]" />
-              <span class="block h-3 w-1/2 rounded bg-[#F5F5F5]" />
+              <span class="block h-4 w-16 rounded-md bg-[#EDEDED]" />
+              <span class="block h-3.5 w-2/5 rounded bg-[#EDEDED]" />
+              <span class="block h-3 w-1/3 rounded bg-[#F5F5F5]" />
             </span>
           </li>
         </ul>
 
-        <!-- 清单 -->
-        <ul v-else class="mt-2 divide-y divide-black/[0.06]">
-          <li v-for="p in itemScan.pieces" :key="p.uid" class="py-3" :class="p.saved ? 'opacity-60' : ''">
-            <div class="flex items-center gap-3">
+        <!-- Progressive Pieces Checklist (Shows Live Shimmer Wipe While Cutting Out, Then Clean Cutout + Magic Wand) -->
+        <ul v-else class="mt-1 divide-y divide-black/[0.06]">
+          <li v-for="p in itemScan.pieces" :key="p.uid" class="py-3.5" :class="p.saved ? 'opacity-55' : ''">
+            <div class="flex items-center gap-3.5">
+              <!-- Checkbox -->
               <button
                 type="button"
                 role="checkbox"
                 :aria-checked="p.selected || p.saved"
                 :aria-label="`选择 ${p.name}`"
-                :disabled="p.saved"
+                :disabled="p.saved || itemScan.isScanning"
                 @click="p.selected = !p.selected"
-                class="w-6 h-6 rounded-full border flex items-center justify-center shrink-0 transition"
+                class="w-[20px] h-[20px] rounded-[6px] border flex items-center justify-center shrink-0 transition"
                 :class="
                   p.saved
                     ? 'bg-[#F5F5F5] border-black/[0.08] text-[#666666]'
@@ -1076,100 +1384,143 @@ function sleep(ms: number) {
                       : 'bg-white border-black/25 hover:border-black'
                 "
               >
-                <AppIcon v-if="p.selected || p.saved" name="check" :size="13" />
+                <AppIcon v-if="p.selected || p.saved" name="check" :size="12" />
               </button>
 
+              <!-- Garment Cutout Thumbnail + Shimmer Wipe + Magic Wand Edit Trigger -->
               <div
-                class="relative group w-14 h-14 rounded-xl bg-[#F5F5F5] ring-1 ring-inset ring-black/[0.04] p-1.5 shrink-0"
+                class="relative w-16 h-16 rounded-2xl bg-[#F5F5F5] ring-1 ring-inset ring-black/[0.05] p-1.5 shrink-0 overflow-hidden"
                 :class="[
                   !p.selected && !p.saved && p.duplicateOf ? 'opacity-50' : '',
-                  p.cutoutStatus === 'running' ? 'animate-pulse' : '',
+                  p.cutoutStatus === 'running' ? 'cutout-shimmer' : '',
                 ]"
-                :title="p.cutoutStatus === 'running' ? '正在抠图…' : '点击可手动画笔精修抠图'"
+                :title="p.cutoutStatus === 'running' ? '正在移除背景…' : '点击右下角魔棒可精修抠图'"
               >
                 <GarmentVisual :image-url="p.processedImageUrl" :svg-type="p.svgType" :color-hex="p.colorHex" :alt="p.name" />
                 <button
-                  v-if="!p.saved && !p.processedImageUrl.startsWith('svg://')"
+                  v-if="!p.saved && p.cutoutStatus !== 'running' && !p.processedImageUrl.startsWith('svg://')"
                   type="button"
                   @click.stop="openMaskEditorForPiece(p)"
-                  class="absolute -bottom-1.5 -right-1.5 px-1.5 py-0.5 rounded-full bg-black text-white text-[9.5px] font-medium shadow-sm opacity-90 hover:opacity-100 transition"
+                  aria-label="精修抠图"
+                  title="手动画笔精修抠图"
+                  class="absolute bottom-1 right-1 w-6 h-6 rounded-full bg-black/85 hover:bg-black text-white flex items-center justify-center shadow-sm transition active:scale-95"
                 >
-                  精修
+                  <AppIcon name="wand" :size="11" />
                 </button>
               </div>
 
+              <!-- Metadata Summary -->
               <button
                 type="button"
                 class="min-w-0 flex-1 flex items-center gap-2 text-left"
                 :class="!p.selected && !p.saved && p.duplicateOf ? 'opacity-60' : ''"
-                :aria-expanded="p.expanded"
-                :aria-label="`${p.expanded ? '收起' : '编辑'} ${p.name}`"
-                :disabled="p.saved"
+                :aria-expanded="detailViewMode || p.expanded"
+                :disabled="p.saved || itemScan.isScanning"
                 @click="toggleExpand(p)"
               >
                 <span class="min-w-0 flex-1">
-                  <span class="flex items-center gap-2">
-                    <span class="text-[11px] px-2 py-0.5 rounded-full bg-[#F5F5F5] text-[#666666] shrink-0">
+                  <template v-if="p.cutoutStatus === 'running'">
+                    <span class="block h-4 w-16 rounded bg-[#EDEDED] animate-pulse" />
+                    <span class="block h-3.5 w-28 rounded bg-[#F2F2F2] mt-2 animate-pulse" />
+                  </template>
+                  <template v-else>
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#F2F2F2] text-[#333333] text-[11px] font-medium">
+                      <AppIcon :name="categoryIconName(p.category)" :size="11" />
                       {{ categoryLabel(p.category) }}
                     </span>
-                    <span class="text-[14px] font-medium text-black truncate">{{ p.name }}</span>
-                  </span>
-                  <span class="block mt-1 text-[12px] text-[#666666] truncate">{{ summaryLine(p) }}</span>
+                    <span class="flex items-center gap-1.5 mt-1">
+                      <span
+                        class="w-2.5 h-2.5 rounded-full border border-black/15 shrink-0"
+                        :style="{ backgroundColor: p.colorHex }"
+                      />
+                      <span class="text-[14.5px] font-semibold text-black truncate">{{ p.name }}</span>
+                    </span>
+                    <span class="block mt-0.5 text-[12px] text-[#777777] truncate">{{ summaryLine(p) }}</span>
+                  </template>
                 </span>
                 <AppIcon
-                  v-if="!p.saved"
+                  v-if="!p.saved && !itemScan.isScanning"
                   name="chevron-right"
                   :size="16"
-                  class="text-[#666666] transition-transform"
-                  :class="p.expanded ? 'rotate-90' : ''"
+                  class="text-[#999999] transition-transform shrink-0"
+                  :class="detailViewMode || p.expanded ? 'rotate-90' : ''"
                 />
               </button>
             </div>
 
-            <!-- 展开：只露出季节 + 风格标签（名称 / 品类 / 颜色 / 价格收在「更多信息」） -->
-            <div v-if="p.expanded && !p.saved" class="mt-3 space-y-4">
-              <div>
-                <div class="text-[12px] text-[#666666] mb-1.5">季节</div>
-                <div class="flex flex-wrap gap-2">
-                  <button
-                    v-for="s in SEASON_OPTIONS"
-                    :key="s"
-                    @click="togglePieceSeason(p, s)"
-                    :aria-pressed="p.seasons.includes(s)"
-                    class="min-w-[44px] px-3.5 py-1.5 rounded-full text-[12.5px] font-medium border transition"
-                    :class="
-                      p.seasons.includes(s)
-                        ? 'bg-black text-white border-black'
-                        : 'bg-white text-[#666666] border-black/[0.08] hover:border-black/30'
-                    "
-                  >
-                    {{ s }}
-                  </button>
+            <!-- Expanded / Detail-View Editor -->
+            <div v-if="(detailViewMode || p.expanded) && !p.saved && !itemScan.isScanning" class="mt-3.5 pl-8 space-y-3.5">
+              <!-- Quick Category + Season Row -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <div class="text-[11.5px] text-[#666666] mb-1.5">分类</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <button
+                      v-for="cat in CATEGORY_OPTIONS"
+                      :key="cat.key"
+                      type="button"
+                      @click="
+                        p.category = cat.key;
+                        p.corrected = true;
+                      "
+                      class="px-2.5 py-1 rounded-full text-[11.5px] font-medium border transition"
+                      :class="
+                        p.category === cat.key
+                          ? 'bg-black text-white border-black'
+                          : 'bg-white text-[#666666] border-black/[0.08] hover:border-black/30'
+                      "
+                    >
+                      {{ cat.label }}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-[11.5px] text-[#666666] mb-1.5">季节</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <button
+                      v-for="s in SEASON_OPTIONS"
+                      :key="s"
+                      type="button"
+                      @click="togglePieceSeason(p, s)"
+                      class="min-w-[38px] px-3 py-1 rounded-full text-[11.5px] font-medium border transition"
+                      :class="
+                        p.seasons.includes(s)
+                          ? 'bg-black text-white border-black'
+                          : 'bg-white text-[#666666] border-black/[0.08] hover:border-black/30'
+                      "
+                    >
+                      {{ s }}
+                    </button>
+                  </div>
                 </div>
               </div>
 
+              <!-- Style Tags -->
               <div>
-                <div class="text-[12px] text-[#666666] mb-1.5">风格标签</div>
-                <div class="flex flex-wrap gap-2">
+                <div class="text-[11.5px] text-[#666666] mb-1.5">风格标签</div>
+                <div class="flex flex-wrap gap-1.5">
                   <span
                     v-for="(tag, i) in p.styleTags"
                     :key="tag"
-                    class="inline-flex items-center gap-1 pl-3 pr-1.5 py-1 rounded-full bg-black text-white text-[12px]"
+                    class="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-0.5 rounded-full bg-black text-white text-[11.5px]"
                   >
                     {{ tag }}
                     <button
+                      type="button"
                       @click="removeTag(p, i)"
                       :aria-label="`移除标签 ${tag}`"
-                      class="w-5 h-5 rounded-full flex items-center justify-center text-white/70 hover:text-white"
+                      class="w-4 h-4 rounded-full flex items-center justify-center text-white/70 hover:text-white"
                     >
-                      <AppIcon name="x" :size="12" />
+                      <AppIcon name="x" :size="10" />
                     </button>
                   </span>
                   <button
                     v-for="t in tagSuggestions(p)"
                     :key="t"
+                    type="button"
                     @click="addTag(p, t)"
-                    class="px-3 py-1 rounded-full border border-dashed border-black/25 text-[12px] text-[#666666] hover:border-black hover:text-black transition"
+                    class="px-2.5 py-0.5 rounded-full border border-dashed border-black/25 text-[11.5px] text-[#666666] hover:border-black hover:text-black transition"
                   >
                     + {{ t }}
                   </button>
@@ -1178,91 +1529,68 @@ function sleep(ms: number) {
                     @keydown.enter="onTagEnter($event, p)"
                     type="text"
                     placeholder="+ 自定义"
-                    aria-label="自定义风格标签，回车添加"
-                    class="w-24 px-3 py-1 rounded-full border border-dashed border-black/25 bg-white focus:border-black focus:border-solid outline-none text-[12px] text-black placeholder:text-[#666666] transition"
+                    class="w-20 px-2.5 py-0.5 rounded-full border border-dashed border-black/25 bg-white focus:border-black focus:border-solid outline-none text-[11.5px] text-black placeholder:text-[#777777]"
                   />
                 </div>
               </div>
 
+              <!-- More Metadata (Name, Color Swatches, Price) -->
               <div>
                 <button
                   type="button"
                   @click="p.moreOpen = !p.moreOpen"
-                  :aria-expanded="p.moreOpen"
-                  class="text-[12px] font-medium text-[#666666] hover:text-black inline-flex items-center gap-1"
+                  class="text-[11.5px] font-medium text-[#666666] hover:text-black inline-flex items-center gap-1"
                 >
-                  更多信息（名称 · 品类 · 颜色 · 购入价）
-                  <AppIcon name="chevron-right" :size="13" class="transition-transform" :class="p.moreOpen ? 'rotate-90' : ''" />
+                  名称 · 颜色 · 购入价
+                  <AppIcon name="chevron-right" :size="12" class="transition-transform" :class="p.moreOpen ? 'rotate-90' : ''" />
                 </button>
 
-                <div v-if="p.moreOpen" class="mt-3 space-y-4">
-                  <div>
-                    <label :for="`name-${p.uid}`" class="block text-[12px] text-[#666666] mb-1.5">名称</label>
-                    <input
-                      :id="`name-${p.uid}`"
-                      v-model="p.name"
-                      @input="p.corrected = true"
-                      type="text"
-                      class="w-full px-3.5 py-2 rounded-xl bg-white border border-black/[0.08] focus:border-black outline-none text-[14px] text-black transition"
-                    />
-                  </div>
-
-                  <div>
-                    <div class="text-[12px] text-[#666666] mb-1.5">品类</div>
-                    <div class="flex flex-wrap gap-2">
-                      <button
-                        v-for="cat in CATEGORY_OPTIONS"
-                        :key="cat.key"
-                        @click="
-                          p.category = cat.key;
-                          p.corrected = true;
-                        "
-                        :aria-pressed="p.category === cat.key"
-                        class="px-3.5 py-1.5 rounded-full text-[12.5px] font-medium border transition"
-                        :class="
-                          p.category === cat.key
-                            ? 'bg-black text-white border-black'
-                            : 'bg-white text-[#666666] border-black/[0.08] hover:border-black/30'
-                        "
-                      >
-                        {{ cat.label }}
-                      </button>
+                <div v-if="p.moreOpen" class="mt-2.5 space-y-3">
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label :for="`name-${p.uid}`" class="block text-[11.5px] text-[#666666] mb-1">名称</label>
+                      <input
+                        :id="`name-${p.uid}`"
+                        v-model="p.name"
+                        @input="p.corrected = true"
+                        type="text"
+                        class="w-full px-3 py-1.5 rounded-xl bg-white border border-black/[0.08] focus:border-black outline-none text-[13px] text-black"
+                      />
+                    </div>
+                    <div>
+                      <label :for="`price-${p.uid}`" class="block text-[11.5px] text-[#666666] mb-1">购入价 ¥（选填）</label>
+                      <input
+                        :id="`price-${p.uid}`"
+                        v-model="p.price"
+                        @input="p.corrected = true"
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="如 299"
+                        class="w-full px-3 py-1.5 rounded-xl bg-white border border-black/[0.08] focus:border-black outline-none font-mono text-[13px] text-black"
+                      />
                     </div>
                   </div>
 
                   <div>
                     <div class="flex items-center justify-between mb-1.5">
-                      <span class="text-[12px] text-[#666666]">颜色</span>
-                      <span class="text-[12px] font-medium text-black">{{ p.color }}</span>
+                      <span class="text-[11.5px] text-[#666666]">颜色</span>
+                      <span class="text-[11.5px] font-medium text-black">{{ p.color }}</span>
                     </div>
-                    <div class="flex flex-wrap gap-2.5">
+                    <div class="flex flex-wrap gap-2">
                       <button
                         v-for="sw in COLOR_SWATCHES"
                         :key="sw.name"
+                        type="button"
                         @click="setPieceColor(p, sw)"
                         :aria-label="`颜色 ${sw.name}`"
-                        :aria-pressed="p.color === sw.name"
-                        class="w-7 h-7 rounded-full border transition flex items-center justify-center"
+                        class="w-6 h-6 rounded-full border transition flex items-center justify-center"
                         :style="{ backgroundColor: sw.hex }"
                         :class="p.color === sw.name ? 'border-black ring-2 ring-black/20 scale-110' : 'border-black/15 hover:scale-105'"
                       >
-                        <AppIcon v-if="p.color === sw.name" name="check" :size="12" :class="sw.light ? 'text-black' : 'text-white'" />
+                        <AppIcon v-if="p.color === sw.name" name="check" :size="11" :class="sw.light ? 'text-black' : 'text-white'" />
                       </button>
                     </div>
-                  </div>
-
-                  <div>
-                    <label :for="`price-${p.uid}`" class="block text-[12px] text-[#666666] mb-1.5">购入价 ¥（用于计算 CPW，选填）</label>
-                    <input
-                      :id="`price-${p.uid}`"
-                      v-model="p.price"
-                      @input="p.corrected = true"
-                      type="number"
-                      min="0"
-                      step="1"
-                      placeholder="如 299"
-                      class="w-40 px-3.5 py-2 rounded-xl bg-white border border-black/[0.08] focus:border-black outline-none font-mono text-[14px] text-black transition"
-                    />
                   </div>
                 </div>
               </div>
@@ -1270,12 +1598,26 @@ function sleep(ms: number) {
           </li>
         </ul>
 
-        <!-- 底部操作 -->
-        <div v-if="itemScan.done" class="mt-auto pt-5 sticky bottom-24 bg-white">
-          <div class="pt-4 border-t border-black/[0.06] flex items-center justify-between gap-3">
+        <!-- Finalizing Cloud Enrichment Indicator -->
+        <div
+          v-if="itemScan.isScanning && itemScan.phase === 'finalize'"
+          class="mt-4 py-3 rounded-2xl bg-[#FAFAFA] flex items-center justify-center gap-2 text-[12px] text-[#666666]"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-black animate-bounce" />
+          <span class="w-1.5 h-1.5 rounded-full bg-black animate-bounce [animation-delay:120ms]" />
+          <span class="w-1.5 h-1.5 rounded-full bg-black animate-bounce [animation-delay:240ms]" />
+          <span class="ml-1">正在准备分析结果…</span>
+        </div>
+
+        <!-- Sticky Bottom Primary CTA -->
+        <div v-if="itemScan.done" class="mt-auto pt-4 sticky bottom-20 lg:static bg-white">
+          <div class="pt-3.5 border-t border-black/[0.06] flex items-center justify-between gap-3">
             <template v-if="allSaved">
-              <button @click="restartScan" class="text-[13px] font-medium text-[#666666] hover:text-black">再识别一张</button>
+              <button type="button" @click="restartScan" class="text-[13px] font-medium text-[#666666] hover:text-black">
+                再识别一张
+              </button>
               <button
+                type="button"
                 @click="router.push('/wardrobe')"
                 class="min-w-[160px] px-8 py-3 rounded-full bg-black hover:bg-black/85 text-white text-[14px] font-medium transition"
               >
@@ -1287,9 +1629,10 @@ function sleep(ms: number) {
                 已选 <span class="font-mono text-black">{{ selectedCount }}</span> / {{ selectablePieces.length }}
               </span>
               <button
+                type="button"
                 @click="saveSelectedPieces"
                 :disabled="selectedCount === 0 || savingItem"
-                class="min-w-[160px] px-8 py-3 rounded-full bg-black hover:bg-black/85 disabled:bg-black/15 disabled:text-black/40 text-white text-[14px] font-medium transition"
+                class="min-w-[170px] px-8 py-3 rounded-full bg-black hover:bg-black/85 disabled:bg-black/15 disabled:text-black/40 text-white text-[14px] font-medium transition"
               >
                 {{ savingItem ? '正在添加…' : '添加到衣橱' }}
               </button>
@@ -1301,7 +1644,6 @@ function sleep(ms: number) {
 
     <!-- ==================== 街拍找同款 ==================== -->
     <div v-else class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <!-- 左：街拍图 -->
       <div class="lg:col-span-5 bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6">
         <div class="flex items-center justify-between mb-4 gap-2">
           <h3 class="text-[16px] font-semibold text-black">街拍图</h3>
@@ -1409,7 +1751,6 @@ function sleep(ms: number) {
         </div>
       </div>
 
-      <!-- 右：拆解与比对 -->
       <div class="lg:col-span-7 space-y-5">
         <div class="bg-white rounded-3xl border border-black/[0.08] p-5 md:p-6">
           <h3 class="text-[16px] font-semibold text-black mb-3">拆解需求与预算</h3>

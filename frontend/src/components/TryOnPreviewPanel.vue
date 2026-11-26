@@ -4,8 +4,9 @@ import { useRouter } from 'vue-router';
 import { useWardrobeStore } from '@/stores/wardrobe';
 import { useLookbookStore } from '@/stores/lookbook';
 import { useToastStore } from '@/stores/toast';
-import type { OutfitPlanVo, TryOnJob } from '@/types';
+import type { OutfitPlanVo, TryOnJob, VisualPieceFeature } from '@/types';
 import AppIcon from './AppIcon.vue';
+import GarmentVisual from './GarmentVisual.vue';
 
 const props = defineProps<{
   plan: OutfitPlanVo;
@@ -23,6 +24,8 @@ const useReferencePhoto = ref(true);
 const submitting = ref(false);
 const uploadingRef = ref(false);
 const applyingCoverId = ref<number | null>(null);
+const deletingJobId = ref<number | null>(null);
+const activePieceSlotKey = ref<string | null>(null);
 const showPrompt = ref(false);
 const refInput = ref<HTMLInputElement | null>(null);
 const nowTick = ref(Date.now());
@@ -81,10 +84,56 @@ const activePreviewUrl = computed(() => {
 const modelRefUrl = computed(() => wardrobeStore.aiConfig.modelReferenceUrl || '');
 const hasImageApiReady = computed(() => wardrobeStore.aiConfig.hasApiKey && wardrobeStore.aiConfig.enabled);
 
+const displayPieces = computed<VisualPieceFeature[]>(() => {
+  const reportPieces = selectedJob.value?.visualReport?.pieces;
+  if (reportPieces && reportPieces.length > 0 && selectedJob.value?.planId === props.plan.id) {
+    return reportPieces;
+  }
+  return (props.plan.slots || []).map((slot) => {
+    const color = slot.item.color || '';
+    const material = slot.item.material || '';
+    const tags = (slot.item.styleTags || []).slice(0, 2).join(' · ');
+    const parts = [color ? `${color}色调` : '', material ? `${material}质感` : '', tags].filter(Boolean);
+    return {
+      slotKey: slot.slotKey,
+      slotLabel: slot.slotLabel,
+      itemId: slot.item.id,
+      name: slot.item.name,
+      imageUrl: slot.item.processedImageUrl,
+      colorHex: slot.item.colorHex,
+      svgType: slot.item.svgType,
+      zhSummary: parts.length ? parts.join(' · ') : slot.item.name,
+      enPrompt: '',
+      visualGrounded: false,
+    };
+  });
+});
+
+const activePiece = computed(
+  () => displayPieces.value.find((p) => p.slotKey === activePieceSlotKey.value) || null
+);
+
+const bodyZonePosition = computed(() => {
+  switch (activePieceSlotKey.value) {
+    case 'outerwear':
+    case 'top':
+      return { top: '28%', left: '50%', label: '上身区域' };
+    case 'bottom':
+      return { top: '60%', left: '50%', label: '下装区域' };
+    case 'shoes':
+      return { top: '87%', left: '50%', label: '足部鞋履' };
+    case 'accessory':
+      return { top: '46%', left: '68%', label: '包配细节' };
+    default:
+      return null;
+  }
+});
+
 watch(
   () => props.plan.id,
   () => {
     showPrompt.value = false;
+    activePieceSlotKey.value = null;
   }
 );
 
@@ -142,10 +191,15 @@ async function handleGenerate() {
 function selectHistoryJob(job: TryOnJob) {
   lookbookStore.selectedTryOnJobId = job.id;
   showPrompt.value = false;
+  activePieceSlotKey.value = null;
+}
+
+function togglePieceHighlight(slotKey: string) {
+  activePieceSlotKey.value = activePieceSlotKey.value === slotKey ? null : slotKey;
 }
 
 async function handleApplyAsCover(job: TryOnJob) {
-  if (!job.previewImageUrl) return;
+  if (!job.previewImageUrl || applyingCoverId.value !== null) return;
   applyingCoverId.value = job.id;
   try {
     await lookbookStore.applyTryOnJobAsCover(job.id);
@@ -159,11 +213,15 @@ async function handleApplyAsCover(job: TryOnJob) {
 }
 
 async function handleDeleteJob(job: TryOnJob) {
+  if (deletingJobId.value !== null) return;
+  deletingJobId.value = job.id;
   try {
     await lookbookStore.deleteTryOnJob(job.id);
     toast.show('已删除该条生成记录');
   } catch (e: any) {
     toast.show(e.message || '删除记录失败');
+  } finally {
+    deletingJobId.value = null;
   }
 }
 
@@ -263,8 +321,8 @@ function downloadPreview() {
             <div class="text-[11px] text-[#666666] truncate">
               {{
                 modelRefUrl
-                  ? '调用 /v1/images/edits 时将自动参考该人物形象与单品抠图'
-                  : '未上传时将自动使用默认东方时尚模特生成杂志上身预览'
+                  ? '生图时将携带该人物参考照与本套全部单品原图，并先由 VLM 提取领型/版型特征'
+                  : '未上传时将使用默认东方时尚模特，同时携带本套全部单品特征参与渲染'
               }}
             </div>
           </div>
@@ -292,17 +350,19 @@ function downloadPreview() {
         <input
           v-model="customPrompt"
           @keyup.enter="handleGenerate"
+          :disabled="isGenerating"
           type="text"
           placeholder="可选补充氛围要求，如：自然步行抓拍 / 低饱和胶片感 / 手持咖啡..."
-          class="flex-1 px-4 py-2 rounded-full bg-[#F5F5F5] focus:bg-white border border-transparent focus:border-black outline-none text-[12.5px] transition"
+          class="flex-1 px-4 py-2 rounded-full bg-[#F5F5F5] focus:bg-white border border-transparent focus:border-black outline-none text-[12.5px] transition disabled:opacity-60"
         />
         <button
           type="button"
           @click="handleGenerate"
           :disabled="isGenerating"
-          class="px-5 py-2 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-60"
+          class="px-5 py-2 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          <AppIcon name="sparkles" :size="15" />
+          <AppIcon v-if="isGenerating" name="loader" :size="15" class="animate-spin" />
+          <AppIcon v-else name="sparkles" :size="15" />
           {{
             isGenerating
               ? `后台渲染中 (${elapsedSeconds}s)...`
@@ -328,7 +388,13 @@ function downloadPreview() {
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           <span>JOB #{{ activeJobForPlan?.id || '...' }} · 已耗时 {{ elapsedSeconds }}s</span>
         </div>
-        <div class="text-[14px] font-semibold text-black">后台任务正在合成杂志级全身试穿预览...</div>
+        <div class="text-[14px] font-semibold text-black">
+          {{
+            elapsedSeconds <= 6
+              ? `正在通过 VLM 解析本套 ${plan.slots.length} 件单品的领型、面料与版型特征…`
+              : '正在融合视觉特征与单品参考图，合成杂志级全身试穿大片…'
+          }}
+        </div>
         <p class="text-[12px] text-[#666666] max-w-sm leading-relaxed">
           任务已持久化到数据库，<strong>现在刷新页面或去逛衣橱/灵感广场都不会中断</strong>，完成后将自动落盘存档。
         </p>
@@ -339,14 +405,28 @@ function downloadPreview() {
         <div class="relative w-full flex flex-col items-center">
           <div class="relative max-w-[360px] w-full aspect-[3/4] rounded-2xl bg-[#FAFAFA] overflow-hidden shadow-editorial">
             <img :src="activePreviewUrl" :alt="plan.themeTitle" class="w-full h-full object-cover object-top" />
+
+            <!-- Body-Zone Focus Ring & Callout when user clicks a piece below -->
+            <div
+              v-if="bodyZonePosition && activePiece"
+              class="absolute -translate-x-1/2 -translate-y-1/2 z-10 pointer-events-none flex flex-col items-center gap-1 transition-all duration-300"
+              :style="{ top: bodyZonePosition.top, left: bodyZonePosition.left }"
+            >
+              <span class="w-8 h-8 rounded-full border-2 border-white bg-black/25 ring-2 ring-black/60 animate-pulse" />
+              <span class="px-2.5 py-0.5 rounded-full bg-black/85 text-white text-[10.5px] font-medium whitespace-nowrap backdrop-blur-sm shadow-sm">
+                {{ activePiece.slotLabel }} · {{ activePiece.name }}
+              </span>
+            </div>
+
             <div class="absolute top-3 right-3 flex items-center gap-1.5">
               <button
                 v-if="selectedJob && selectedJob.previewImageUrl !== plan.tryOnImageUrl"
                 type="button"
                 @click="handleApplyAsCover(selectedJob)"
                 :disabled="applyingCoverId === selectedJob.id"
-                class="px-2.5 h-8 rounded-full bg-black/85 hover:bg-black text-white text-[11px] font-medium backdrop-blur-md transition"
+                class="inline-flex items-center gap-1 px-2.5 h-8 rounded-full bg-black/85 hover:bg-black text-white text-[11px] font-medium backdrop-blur-md transition disabled:opacity-60"
               >
+                <AppIcon v-if="applyingCoverId === selectedJob.id" name="loader" :size="12" class="animate-spin" />
                 {{ applyingCoverId === selectedJob.id ? '保存中...' : '设为本套封面' }}
               </button>
               <button
@@ -360,19 +440,122 @@ function downloadPreview() {
             </div>
           </div>
 
+          <!-- Interactive Piece Comparison Strip ("本套单品视觉对照") -->
+          <div v-if="displayPieces.length > 0" class="mt-4 w-full max-w-lg space-y-2">
+            <div class="flex items-center justify-between text-[11.5px]">
+              <span class="font-medium text-black">本套单品视觉对照</span>
+              <span class="text-[#777777]">点击单品卡片可定位模特穿着区域与细节解析</span>
+            </div>
+            <div class="grid grid-cols-3 sm:grid-cols-5 gap-2">
+              <button
+                v-for="piece in displayPieces"
+                :key="piece.slotKey + '-' + (piece.itemId || piece.name)"
+                type="button"
+                @click="togglePieceHighlight(piece.slotKey)"
+                class="rounded-xl p-1.5 border text-left transition flex flex-col items-center focus:outline-none"
+                :class="
+                  activePieceSlotKey === piece.slotKey
+                    ? 'border-black bg-[#F2F2F2] ring-1 ring-black'
+                    : 'border-black/[0.08] bg-[#FAFAFA] hover:border-black/30'
+                "
+              >
+                <div class="w-full aspect-square rounded-lg bg-white p-1 flex items-center justify-center overflow-hidden">
+                  <GarmentVisual
+                    :image-url="piece.imageUrl"
+                    :svg-type="piece.svgType"
+                    :color-hex="piece.colorHex"
+                    :alt="piece.name"
+                  />
+                </div>
+                <span class="mt-1 text-[10px] font-medium text-black truncate w-full text-center">{{ piece.slotLabel }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Plan D: Structured Chinese AI Visual Feature Analysis Report -->
           <div
-            v-if="selectedJob?.notice"
-            class="mt-3.5 w-full max-w-lg px-4 py-2.5 rounded-2xl bg-[#FAFAFA] border border-black/[0.06] text-[12px] text-[#555555] leading-relaxed flex items-start justify-between gap-3"
+            v-if="selectedJob"
+            class="mt-3.5 w-full max-w-lg rounded-2xl bg-[#FAFAFA] border border-black/[0.08] p-3.5 space-y-2.5 text-left"
           >
-            <span>{{ selectedJob.notice }}</span>
-            <button
-              v-if="selectedJob.promptUsed"
-              type="button"
-              @click="showPrompt = !showPrompt"
-              class="text-black font-medium shrink-0 underline"
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5">
+                <AppIcon name="sparkles" :size="13" class="text-black" />
+                <span class="text-[12.5px] font-semibold text-black">AI 视觉特征解析报告</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span
+                  class="px-2 py-0.5 rounded-full text-[10px] font-medium border"
+                  :class="
+                    selectedJob.visualReport?.usedRealVlm
+                      ? 'bg-black text-white border-black'
+                      : 'bg-white text-[#555555] border-black/10'
+                  "
+                >
+                  {{
+                    selectedJob.visualReport?.usedRealVlm
+                      ? `VLM 看图反推 · 已解析 ${selectedJob.visualReport.referencedGarmentCount} 件`
+                      : '衣橱属性解析'
+                  }}
+                </span>
+                <span
+                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white border border-black/10 text-[#444444]"
+                >
+                  {{ selectedJob.visualReport?.usedGarmentImagesInGen ? '原图垫图融合' : '视觉描述引导' }}
+                </span>
+              </div>
+            </div>
+
+            <div
+              v-if="selectedJob.visualReport"
+              class="flex flex-wrap items-center gap-1.5 text-[11px] text-[#555555]"
             >
-              {{ showPrompt ? '收起 Prompt' : '查看 Prompt' }}
-            </button>
+              <span class="px-2 py-0.5 rounded-full bg-white border border-black/[0.06]">
+                {{ selectedJob.visualReport.bodyProfile }}
+              </span>
+              <span class="px-2 py-0.5 rounded-full bg-white border border-black/[0.06]">
+                {{ selectedJob.visualReport.sceneLabel }}
+              </span>
+              <span class="text-[#333333] leading-relaxed">
+                {{ selectedJob.visualReport.overallPalette }}
+              </span>
+            </div>
+
+            <div v-if="displayPieces.length > 0" class="space-y-1.5 pt-1 border-t border-black/[0.06]">
+              <div
+                v-for="piece in displayPieces"
+                :key="'rpt-' + piece.slotKey"
+                @click="togglePieceHighlight(piece.slotKey)"
+                class="flex items-start gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer transition"
+                :class="
+                  activePieceSlotKey === piece.slotKey
+                    ? 'bg-white border border-black/25 shadow-2xs'
+                    : 'hover:bg-white/80'
+                "
+              >
+                <span class="shrink-0 mt-0.5 px-1.5 py-0.5 rounded-md bg-black text-white text-[10px] font-medium">
+                  {{ piece.slotLabel }}
+                </span>
+                <div class="min-w-0 text-[11.5px] leading-relaxed">
+                  <span class="font-medium text-black">{{ piece.name }}</span>
+                  <span class="text-[#666666]"> — {{ piece.zhSummary }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-if="selectedJob.notice || selectedJob.promptUsed"
+              class="pt-2 border-t border-black/[0.06] flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#666666]"
+            >
+              <span class="flex-1 min-w-[200px]">{{ selectedJob.notice }}</span>
+              <button
+                v-if="selectedJob.promptUsed"
+                type="button"
+                @click="showPrompt = !showPrompt"
+                class="text-black font-medium shrink-0 underline underline-offset-2"
+              >
+                {{ showPrompt ? '收起底层 Prompt' : '查看底层英文 Prompt' }}
+              </button>
+            </div>
           </div>
 
           <div
@@ -464,10 +647,12 @@ function downloadPreview() {
               v-if="job.status !== 'PROCESSING' && job.status !== 'QUEUED'"
               type="button"
               @click.stop="handleDeleteJob(job)"
+              :disabled="deletingJobId === job.id"
               title="删除该条记录"
-              class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-white/90 hover:bg-black hover:text-white text-[#666666] opacity-0 group-hover:opacity-100 flex items-center justify-center transition"
+              class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-white/90 hover:bg-black hover:text-white text-[#666666] opacity-0 group-hover:opacity-100 flex items-center justify-center transition disabled:opacity-60"
             >
-              <AppIcon name="x" :size="11" />
+              <AppIcon v-if="deletingJobId === job.id" name="loader" :size="10" class="animate-spin" />
+              <AppIcon v-else name="x" :size="11" />
             </button>
           </div>
           <div class="px-1.5 py-1 bg-white">

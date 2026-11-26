@@ -31,6 +31,7 @@ const filter = reactive({
 });
 
 const filterOpen = ref(false);
+const stylingItemId = ref<number | null>(null);
 
 // 面板内的筛选项（色系 + 排序）数量，用于按钮角标
 const activeFilterCount = computed(
@@ -90,11 +91,20 @@ function openItem(item: WardrobeItem) {
 }
 
 async function styleWithAnchor(item: WardrobeItem) {
+  if (stylingItemId.value !== null) return;
+  stylingItemId.value = item.id;
   lookbookStore.triggerMode = 'anchor';
   lookbookStore.anchorItemId = item.id;
-  router.push('/lookbook');
-  await lookbookStore.generateRecommendation({ triggerType: 'anchor_item', anchorItemId: item.id });
-  toast.show(`已围绕「${item.name}」生成专属搭配方案`);
+  toast.show(`正在围绕「${item.name}」生成专属搭配…`);
+  try {
+    await lookbookStore.generateRecommendation({ triggerType: 'anchor_item', anchorItemId: item.id });
+    router.push('/lookbook');
+    toast.show(`已围绕「${item.name}」生成专属搭配方案`);
+  } catch (e: any) {
+    toast.show(e?.message || '生成搭配失败，请重试');
+  } finally {
+    stylingItemId.value = null;
+  }
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -215,18 +225,23 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           <!-- 桌面：悬停/聚焦时出现的文字胶囊 -->
           <button
             @click.stop="styleWithAnchor(item)"
-            class="absolute bottom-3 left-1/2 -translate-x-1/2 translate-y-2 whitespace-nowrap px-4 py-2 rounded-full bg-black/90 hover:bg-black text-white text-[12px] font-medium opacity-0 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 [@media(hover:none)]:hidden transition-all duration-200 flex items-center justify-center gap-1.5 shadow-md"
+            :disabled="stylingItemId !== null"
+            class="absolute bottom-3 left-1/2 -translate-x-1/2 translate-y-2 whitespace-nowrap px-4 py-2 rounded-full bg-black/90 hover:bg-black text-white text-[12px] font-medium opacity-0 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 [@media(hover:none)]:hidden transition-all duration-200 flex items-center justify-center gap-1.5 shadow-md disabled:opacity-65 disabled:cursor-not-allowed"
+            :class="stylingItemId === item.id ? '!opacity-100 !translate-y-0' : ''"
           >
-            <AppIcon name="sparkles" :size="13" />
-            以此单品为核心搭配
+            <AppIcon v-if="stylingItemId === item.id" name="loader" :size="13" class="animate-spin" />
+            <AppIcon v-else name="sparkles" :size="13" />
+            {{ stylingItemId === item.id ? '生成搭配中…' : '以此单品为核心搭配' }}
           </button>
           <!-- 触屏：没有悬停，常驻一个小圆钮 -->
           <button
             @click.stop="styleWithAnchor(item)"
+            :disabled="stylingItemId !== null"
             aria-label="以此单品为核心搭配"
-            class="hidden [@media(hover:none)]:flex absolute bottom-2 right-2 w-8 h-8 rounded-full bg-black text-white items-center justify-center shadow-md active:scale-95 transition"
+            class="hidden [@media(hover:none)]:flex absolute bottom-2 right-2 w-8 h-8 rounded-full bg-black text-white items-center justify-center shadow-md active:scale-95 transition disabled:opacity-65"
           >
-            <AppIcon name="sparkles" :size="14" />
+            <AppIcon v-if="stylingItemId === item.id" name="loader" :size="14" class="animate-spin" />
+            <AppIcon v-else name="sparkles" :size="14" />
           </button>
         </div>
 

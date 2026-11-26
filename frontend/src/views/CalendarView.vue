@@ -66,6 +66,10 @@ const selectedRecord = computed(
 const noteDraft = ref('');
 const photoReplaceInputRef = ref<HTMLInputElement | null>(null);
 const uploadingRecordPhoto = ref(false);
+const savingNotes = ref(false);
+const savingRating = ref(false);
+const deletingPhoto = ref(false);
+const removingFavId = ref<number | null>(null);
 
 // AI Outfit Critique state for existing OOTD photo
 const critiquingOotd = ref(false);
@@ -146,15 +150,29 @@ function shiftMonth(delta: number) {
 }
 
 async function setRating(star: number) {
-  if (!selectedRecord.value) return;
-  await lookbookStore.updateHistoryRecord(selectedRecord.value.id, { feedbackScore: star });
-  toast.show(`已更新满意度为 ${star} 星，隐性偏好权重已同步演进`);
+  if (!selectedRecord.value || savingRating.value) return;
+  savingRating.value = true;
+  try {
+    await lookbookStore.updateHistoryRecord(selectedRecord.value.id, { feedbackScore: star });
+    toast.show(`已更新满意度为 ${star} 星，隐性偏好权重已同步演进`);
+  } catch (err: any) {
+    toast.show(err?.message || '评分更新失败');
+  } finally {
+    savingRating.value = false;
+  }
 }
 
 async function saveNotes() {
-  if (!selectedRecord.value) return;
-  await lookbookStore.updateHistoryRecord(selectedRecord.value.id, { notes: noteDraft.value });
-  toast.show('个人穿搭心得笔记已保存');
+  if (!selectedRecord.value || savingNotes.value) return;
+  savingNotes.value = true;
+  try {
+    await lookbookStore.updateHistoryRecord(selectedRecord.value.id, { notes: noteDraft.value });
+    toast.show('个人穿搭心得笔记已保存');
+  } catch (err: any) {
+    toast.show(err?.message || '保存心得失败');
+  } finally {
+    savingNotes.value = false;
+  }
 }
 
 async function onReplaceHistoryPhoto(e: Event) {
@@ -175,13 +193,16 @@ async function onReplaceHistoryPhoto(e: Event) {
 }
 
 async function handleDeleteHistoryPhoto() {
-  if (!selectedRecord.value) return;
+  if (!selectedRecord.value || deletingPhoto.value) return;
+  deletingPhoto.value = true;
   try {
     await lookbookStore.deleteHistoryPhoto(selectedRecord.value.id);
     ootdCritique.value = null;
     toast.show('已移除当日实拍照片');
   } catch (err: any) {
     toast.show(err.message || '移除失败');
+  } finally {
+    deletingPhoto.value = false;
   }
 }
 
@@ -299,8 +320,16 @@ async function submitOotdCheckin() {
 }
 
 async function removeFavorite(id: number) {
-  await lookbookStore.toggleFavorite(id);
-  toast.show('已取消收藏');
+  if (removingFavId.value !== null) return;
+  removingFavId.value = id;
+  try {
+    await lookbookStore.toggleFavorite(id);
+    toast.show('已取消收藏');
+  } catch (err: any) {
+    toast.show(err?.message || '操作失败');
+  } finally {
+    removingFavId.value = null;
+  }
 }
 
 function openLookInEngine(plan: OutfitPlanVo) {
@@ -535,9 +564,10 @@ function openLookInEngine(plan: OutfitPlanVo) {
                 type="button"
                 @click="runOotdCritique"
                 :disabled="critiquingOotd"
-                class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition disabled:opacity-50"
+                class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition disabled:opacity-55 disabled:cursor-not-allowed"
               >
-                <AppIcon name="sparkles" :size="13" />
+                <AppIcon v-if="critiquingOotd" name="loader" :size="13" class="animate-spin" />
+                <AppIcon v-else name="sparkles" :size="13" />
                 {{ critiquingOotd ? 'AI 审图体检中...' : 'AI 体检这套实拍' }}
               </button>
               <div class="flex items-center gap-1.5">
@@ -545,17 +575,20 @@ function openLookInEngine(plan: OutfitPlanVo) {
                   type="button"
                   @click="photoReplaceInputRef?.click()"
                   :disabled="uploadingRecordPhoto"
-                  class="px-3 py-1.5 rounded-full border border-black/15 hover:border-black text-[11.5px] text-black transition"
+                  class="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-black/15 hover:border-black text-[11.5px] text-black transition disabled:opacity-55 disabled:cursor-not-allowed"
                 >
+                  <AppIcon v-if="uploadingRecordPhoto" name="loader" :size="12" class="animate-spin" />
                   {{ uploadingRecordPhoto ? '上传中...' : '更换实拍' }}
                 </button>
                 <button
                   type="button"
                   @click="handleDeleteHistoryPhoto"
+                  :disabled="deletingPhoto"
                   title="移除实拍照片"
-                  class="w-7 h-7 rounded-full border border-black/10 hover:border-black text-[#666666] hover:text-black flex items-center justify-center transition"
+                  class="w-7 h-7 rounded-full border border-black/10 hover:border-black text-[#666666] hover:text-black flex items-center justify-center transition disabled:opacity-50"
                 >
-                  <AppIcon name="trash" :size="13" />
+                  <AppIcon v-if="deletingPhoto" name="loader" :size="13" class="animate-spin" />
+                  <AppIcon v-else name="trash" :size="13" />
                 </button>
               </div>
             </div>
@@ -566,9 +599,10 @@ function openLookInEngine(plan: OutfitPlanVo) {
             type="button"
             @click="photoReplaceInputRef?.click()"
             :disabled="uploadingRecordPhoto"
-            class="w-full py-3 px-4 rounded-2xl border border-dashed border-black/20 hover:border-black bg-[#FAFAFA] hover:bg-[#F5F5F5] text-[12.5px] text-black flex items-center justify-center gap-2 transition"
+            class="w-full py-3 px-4 rounded-2xl border border-dashed border-black/20 hover:border-black bg-[#FAFAFA] hover:bg-[#F5F5F5] text-[12.5px] text-black flex items-center justify-center gap-2 transition disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <AppIcon name="camera" :size="15" />
+            <AppIcon v-if="uploadingRecordPhoto" name="loader" :size="15" class="animate-spin" />
+            <AppIcon v-else name="camera" :size="15" />
             <span>{{ uploadingRecordPhoto ? '正在上传实拍照片...' : '上传当日真人对镜 OOTD 实拍（支持 AI 看图体检）' }}</span>
           </button>
 
@@ -670,8 +704,9 @@ function openLookInEngine(plan: OutfitPlanVo) {
                   v-for="star in 5"
                   :key="star"
                   type="button"
+                  :disabled="savingRating"
                   @click="setRating(star)"
-                  class="hover:scale-110 transition"
+                  class="hover:scale-110 transition disabled:opacity-50"
                 >
                   {{ star <= (selectedRecord.feedbackScore || 0) ? '★' : '☆' }}
                 </button>
@@ -686,9 +721,11 @@ function openLookInEngine(plan: OutfitPlanVo) {
               <button
                 type="button"
                 @click="saveNotes"
-                class="px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition"
+                :disabled="savingNotes"
+                class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[12px] font-medium transition disabled:opacity-55 disabled:cursor-not-allowed"
               >
-                保存心得
+                <AppIcon v-if="savingNotes" name="loader" :size="12" class="animate-spin" />
+                {{ savingNotes ? '保存中…' : '保存心得' }}
               </button>
             </div>
           </div>
@@ -734,9 +771,10 @@ function openLookInEngine(plan: OutfitPlanVo) {
               type="button"
               @click="autoDetectWornItems"
               :disabled="checkin.detecting"
-              class="w-full py-2 px-3 rounded-full border border-black text-black hover:bg-black hover:text-white text-[12px] font-medium flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+              class="w-full py-2 px-3 rounded-full border border-black text-black hover:bg-black hover:text-white text-[12px] font-medium flex items-center justify-center gap-1.5 transition disabled:opacity-55 disabled:cursor-not-allowed"
             >
-              <AppIcon name="sparkles" :size="13" />
+              <AppIcon v-if="checkin.detecting" name="loader" :size="13" class="animate-spin" />
+              <AppIcon v-else name="sparkles" :size="13" />
               {{ checkin.detecting ? 'AI 正在识别你今天穿了哪几件...' : 'AI 自动识别图中所穿衣橱单品' }}
             </button>
           </div>
@@ -823,8 +861,9 @@ function openLookInEngine(plan: OutfitPlanVo) {
             type="button"
             @click="submitOotdCheckin"
             :disabled="!checkin.file || checkin.submitting"
-            class="w-full py-2.5 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition disabled:opacity-40"
+            class="w-full py-2.5 rounded-full bg-black hover:bg-[#262626] text-white text-[13px] font-medium transition inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
           >
+            <AppIcon v-if="checkin.submitting" name="loader" :size="14" class="animate-spin" />
             {{ checkin.submitting ? '正在保存实拍打卡...' : '保存 OOTD 打卡到穿搭日历' }}
           </button>
         </div>
@@ -845,8 +884,14 @@ function openLookInEngine(plan: OutfitPlanVo) {
                 <span class="text-[11px] px-2 py-0.5 rounded-full bg-[#F5F5F5] text-[#666666]">{{ look.sceneTag }}</span>
                 <h4 class="text-[17px] font-semibold text-black mt-1">{{ look.themeTitle }}</h4>
               </div>
-              <button @click="removeFavorite(look.id)" class="text-black hover:scale-110 transition" title="取消收藏">
-                <AppIcon name="heart" :size="18" fill="#000000" />
+              <button
+                @click="removeFavorite(look.id)"
+                :disabled="removingFavId === look.id"
+                class="text-black hover:scale-110 transition disabled:opacity-50"
+                title="取消收藏"
+              >
+                <AppIcon v-if="removingFavId === look.id" name="loader" :size="16" class="animate-spin" />
+                <AppIcon v-else name="heart" :size="18" fill="#000000" />
               </button>
             </div>
             <div class="grid grid-cols-4 gap-2 p-3 rounded-2xl flatlay-canvas border border-black/[0.06] mb-3">

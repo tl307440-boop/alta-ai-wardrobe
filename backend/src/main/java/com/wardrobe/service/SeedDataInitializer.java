@@ -55,6 +55,16 @@ public class SeedDataInitializer implements ApplicationRunner {
                 log.debug("Skipped outfit_history.ootd_photo_url migration: {}", e.getMessage());
             }
         }
+        try {
+            jdbcTemplate.query("SELECT visual_report FROM try_on_job WHERE 1 = 0", rs -> null);
+        } catch (Exception missingCol) {
+            try {
+                jdbcTemplate.execute("ALTER TABLE try_on_job ADD COLUMN visual_report TEXT DEFAULT NULL");
+                log.info("Applied idempotent schema migration: added try_on_job.visual_report");
+            } catch (Exception e) {
+                log.debug("Skipped try_on_job.visual_report migration: {}", e.getMessage());
+            }
+        }
     }
 
     /**

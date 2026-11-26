@@ -38,6 +38,7 @@ onMounted(async () => {
 const dockItems = [
   { name: 'dashboard', path: '/', label: '首页', icon: 'home' },
   { name: 'wardrobe', path: '/wardrobe', label: '衣橱', icon: 'shirt' },
+  { name: 'lookbook', path: '/lookbook', label: '搭配画板', icon: 'layers' },
   { name: 'inspo', path: '/inspo', label: '灵感发现', icon: 'search' },
   { name: 'profile', path: '/profile', label: '我的', icon: 'user' },
 ];
@@ -58,10 +59,10 @@ const createActions = [
     query: { mode: 'inspiration' } as Record<string, string>,
   },
   {
-    key: 'lookbook',
-    icon: 'layers',
-    title: '智能平铺搭配画板',
-    path: '/lookbook',
+    key: 'calendar-ootd',
+    icon: 'calendar',
+    title: '记录今日实拍 OOTD',
+    path: '/calendar',
     query: undefined as Record<string, string> | undefined,
   },
 ];
@@ -182,7 +183,7 @@ function goQuickAction(path: string, query?: Record<string, string>) {
               aria-hidden="true"
               class="pointer-events-none absolute inset-y-1 left-0 z-0 rounded-full bg-black/[0.09] transition-transform duration-300 ease-out"
               :style="{
-                width: '25%',
+                width: `${100 / dockItems.length}%`,
                 transform: `translateX(${activeDockIndex * 100}%)`,
               }"
             />

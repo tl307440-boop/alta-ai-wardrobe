@@ -3,6 +3,7 @@ package com.wardrobe.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.wardrobe.common.BusinessException;
 import com.wardrobe.common.ErrorCode;
+import com.wardrobe.common.JsonUtils;
 import com.wardrobe.mapper.TryOnJobMapper;
 import com.wardrobe.model.dto.OutfitDto;
 import com.wardrobe.model.entity.OutfitPlan;
@@ -29,6 +30,7 @@ public class TryOnJobService {
 
     private final TryOnJobMapper tryOnJobMapper;
     private final OutfitRecommendationService outfitRecommendationService;
+    private final JsonUtils jsonUtils;
 
     private final ExecutorService executor = Executors.newFixedThreadPool(4, r -> {
         Thread t = new Thread(r, "tryon-job-worker");
@@ -118,6 +120,7 @@ public class TryOnJobService {
             job.setModelUsed(res.getModelUsed());
             job.setEndpointUsed(res.getEndpointUsed());
             job.setPromptUsed(res.getPromptUsed());
+            job.setVisualReport(res.getVisualReport() != null ? jsonUtils.toJson(res.getVisualReport()) : null);
             job.setNotice(res.getNotice());
             job.setErrorMessage(null);
             job.setUpdatedAt(LocalDateTime.now());
@@ -220,6 +223,7 @@ public class TryOnJobService {
                 .modelUsed(job.getModelUsed())
                 .endpointUsed(job.getEndpointUsed())
                 .promptUsed(job.getPromptUsed())
+                .visualReport(jsonUtils.fromJson(job.getVisualReport(), OutfitDto.TryOnVisualReportVo.class, null))
                 .previewImageUrl(job.getPreviewImageUrl())
                 .notice(job.getNotice())
                 .errorMessage(job.getErrorMessage())

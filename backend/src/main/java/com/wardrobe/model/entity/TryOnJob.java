@@ -24,6 +24,7 @@ public class TryOnJob {
     private String modelUsed;
     private String endpointUsed;
     private String promptUsed;
+    private String visualReport;
     private String previewImageUrl;
     private String notice;
     private String errorMessage;

@@ -523,30 +523,40 @@ public class OutfitRecommendationService {
         }
 
         // Default daily_weather driven recommendation
+        Set<Long> excludeSet = req.getExcludeItemIds() != null
+                ? new HashSet<>(req.getExcludeItemIds()) : Collections.emptySet();
         int temp = weather.getTemp();
         if (temp >= 25) {
-            pickBest(scored, wardrobe, chosen, "top", "白T", "纯白");
-            pickBest(scored, wardrobe, chosen, "bottom", "裙", "牛仔");
-            pickBest(scored, wardrobe, chosen, "shoes", "德训", "乐福");
-            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包");
+            pickBest(scored, wardrobe, chosen, "top", "白T", "纯白", excludeSet);
+            pickBest(scored, wardrobe, chosen, "bottom", "裙", "牛仔", excludeSet);
+            pickBest(scored, wardrobe, chosen, "shoes", "德训", "乐福", excludeSet);
+            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包", excludeSet);
             List<OutfitDto.MissingSlotVo> missing = chosen.isEmpty() ? List.of(stripedTeeMissing()) : Collections.emptyList();
             return new StylistOutput("清透燕麦 · 晴暖出街", orderedIds(chosen), missing,
                     temp + "℃ 晴暖天气已自动过滤厚外套，优先挑选轻盈透气单品，延续低饱和燕麦画廊美学。", 94.0);
         } else if (temp <= 11) {
-            pickBest(scored, wardrobe, chosen, "top", "背心", "针织");
-            pickBest(scored, wardrobe, chosen, "bottom", "阔腿", "牛仔");
-            pickBest(scored, wardrobe, chosen, "shoes", "乐福", "德训");
-            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包");
-            return new StylistOutput("美拉德防风 · 降温保暖", orderedIds(chosen), List.of(suedeMissing()),
-                    temp + "℃ 降温天气优先保障锁温与防风，内搭针织叠穿并建议补充美拉德麂皮工装外套增添暖调质感。", 95.0);
+            pickBest(scored, wardrobe, chosen, "outerwear", "大衣", "外套", excludeSet);
+            pickBest(scored, wardrobe, chosen, "top", "背心", "针织", excludeSet);
+            pickBest(scored, wardrobe, chosen, "bottom", "阔腿", "牛仔", excludeSet);
+            pickBest(scored, wardrobe, chosen, "shoes", "乐福", "德训", excludeSet);
+            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包", excludeSet);
+            List<OutfitDto.MissingSlotVo> missing = chosen.containsKey("outerwear")
+                    ? Collections.emptyList() : List.of(suedeMissing());
+            return new StylistOutput("美拉德防风 · 降温保暖", orderedIds(chosen), missing,
+                    temp + "℃ 降温天气优先保障锁温与防风，内搭针织叠穿并兼顾暖调质感。", 95.0);
         } else {
-            pickBest(scored, wardrobe, chosen, "top", "白T", "纯白");
-            pickBest(scored, wardrobe, chosen, "bottom", "牛仔", "阔腿");
-            pickBest(scored, wardrobe, chosen, "shoes", "乐福", "德训");
-            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包");
-            return new StylistOutput("温柔通勤 · 轻松出门", orderedIds(chosen), List.of(trenchMissing()),
+            if (!excludeSet.isEmpty()) {
+                pickBest(scored, wardrobe, chosen, "outerwear", "风衣", "西装", excludeSet);
+            }
+            pickBest(scored, wardrobe, chosen, "top", "白T", "纯白", excludeSet);
+            pickBest(scored, wardrobe, chosen, "bottom", "牛仔", "阔腿", excludeSet);
+            pickBest(scored, wardrobe, chosen, "shoes", "乐福", "德训", excludeSet);
+            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包", excludeSet);
+            List<OutfitDto.MissingSlotVo> missing = chosen.containsKey("outerwear")
+                    ? Collections.emptyList() : List.of(trenchMissing());
+            return new StylistOutput("温柔通勤 · 轻松出门", orderedIds(chosen), missing,
                     weather.getCity() + "当前 " + temp + "℃ " + weather.getCondition()
-                            + "，以衣橱已有基础白T与牛仔裤构建利落基底，焦糖乐福鞋与燕麦托特包呼应大地色系；补齐短款风衣即可拿捏通勤松弛感。",
+                            + "，以衣橱已有单品构建利落基底，鞋包呼应大地色系，轻松拿捏通勤松弛感。",
                     96.0);
         }
     }
@@ -1105,22 +1115,149 @@ public class OutfitRecommendationService {
         String customPrompt = req != null && req.getCustomPrompt() != null ? req.getCustomPrompt().trim() : "";
         String generationMode = req != null && req.getGenerationMode() != null ? req.getGenerationMode().trim() : "auto";
 
-        // Build clean English + Chinese fashion editorial prompt from actual outfit pieces
-        String garmentDescriptions = planVo.getSlots().stream()
-                .map(s -> s.getSlotLabel() + ": " + s.getItem().getColor() + " " + s.getItem().getName())
-                .collect(Collectors.joining(", "));
+        Map<Long, WardrobeItem> wardrobeById = wardrobe.stream()
+                .collect(Collectors.toMap(WardrobeItem::getId, w -> w, (a, b) -> a));
+
+        // 1. Resolve ALL real garment images (both user uploads and /alta/pieces/ studio cutouts)
+        Map<String, StorageService.StoredImage> garmentImagesBySlot = new LinkedHashMap<>();
+        List<OutfitDto.PlanSlotVo> allSlots = planVo.getSlots() != null ? planVo.getSlots() : Collections.emptyList();
+        for (OutfitDto.PlanSlotVo slot : allSlots) {
+            if (garmentImagesBySlot.size() >= 5 || slot.getItem() == null) continue;
+            StorageService.StoredImage gImg = storageService.readGarmentImageForAi(userId, slot.getItem().getProcessedImageUrl());
+            if (gImg == null && slot.getItem().getId() != null) {
+                WardrobeItem entity = wardrobeById.get(slot.getItem().getId());
+                if (entity != null) {
+                    gImg = storageService.readGarmentImageForAi(userId, entity.getOriginalImageUrl());
+                }
+            }
+            if (gImg != null && !garmentImagesBySlot.containsKey(slot.getSlotKey())) {
+                garmentImagesBySlot.put(slot.getSlotKey(), gImg);
+            }
+        }
+
+        // 2. Plan A — VLM Visual Feature Grounding: inspect real garment cutouts before generation
+        boolean usedVlmVisualExtraction = false;
+        String vlmOverallPalette = null;
+        Map<String, JsonNode> extractedBySlot = new LinkedHashMap<>();
+        if (creds.active() && !garmentImagesBySlot.isEmpty()) {
+            try {
+                StringBuilder metaBuilder = new StringBuilder();
+                List<String> dataUris = new ArrayList<>();
+                int idx = 1;
+                for (OutfitDto.PlanSlotVo slot : allSlots) {
+                    StorageService.StoredImage gImg = garmentImagesBySlot.get(slot.getSlotKey());
+                    if (gImg == null) continue;
+                    String uri = llmClient.toCompactVisionDataUri(
+                            "garment_" + slot.getSlotKey(), gImg.mimeType(), gImg.bytes());
+                    if (uri == null) continue;
+                    dataUris.add(uri);
+                    metaBuilder.append("[图").append(idx++).append("] ")
+                            .append("slotKey=").append(slot.getSlotKey())
+                            .append(" (").append(slot.getSlotLabel()).append("): ")
+                            .append(Objects.toString(slot.getItem().getColor(), ""))
+                            .append(" ")
+                            .append(Objects.toString(slot.getItem().getName(), ""))
+                            .append("\n");
+                }
+                if (!dataUris.isEmpty()) {
+                    JsonNode vlmNode = llmClient.extractOutfitVisualDetails(creds, metaBuilder.toString(), dataUris);
+                    if (vlmNode != null && vlmNode.path("items").isArray()) {
+                        vlmOverallPalette = vlmNode.path("overallPalette").asText(null);
+                        for (JsonNode itemNode : vlmNode.path("items")) {
+                            String sKey = itemNode.path("slotKey").asText("");
+                            if (!sKey.isBlank()) {
+                                extractedBySlot.put(sKey, itemNode);
+                            }
+                        }
+                        usedVlmVisualExtraction = !extractedBySlot.isEmpty();
+                    }
+                }
+            } catch (Exception ex) {
+                log.warn("VLM garment visual feature extraction fell back to wardrobe attributes: {}", ex.getMessage());
+            }
+        }
+
+        // 3. Build structured piece features (Chinese editorial report + detailed English prompt)
+        List<OutfitDto.VisualPieceFeatureVo> pieceFeatures = new ArrayList<>();
+        for (OutfitDto.PlanSlotVo slot : allSlots) {
+            WardrobeDto.ItemVo item = slot.getItem();
+            if (item == null) continue;
+            JsonNode extracted = extractedBySlot.get(slot.getSlotKey());
+            String zhSummary = extracted != null ? extracted.path("zhSummary").asText("").trim() : "";
+            String enPrompt = extracted != null ? extracted.path("enPrompt").asText("").trim() : "";
+            boolean grounded = !zhSummary.isBlank() && !enPrompt.isBlank();
+            if (!grounded) {
+                zhSummary = buildFallbackZhSummary(slot);
+                enPrompt = buildFallbackEnPrompt(slot);
+            }
+            pieceFeatures.add(OutfitDto.VisualPieceFeatureVo.builder()
+                    .slotKey(slot.getSlotKey())
+                    .slotLabel(slot.getSlotLabel())
+                    .itemId(item.getId())
+                    .name(item.getName())
+                    .imageUrl(item.getProcessedImageUrl())
+                    .colorHex(item.getColorHex())
+                    .svgType(item.getSvgType())
+                    .zhSummary(zhSummary)
+                    .enPrompt(enPrompt)
+                    .visualGrounded(grounded)
+                    .build());
+        }
+
+        String garmentDescriptions = pieceFeatures.stream()
+                .map(p -> p.getSlotLabel() + " (" + p.getName() + "): " + p.getEnPrompt())
+                .collect(Collectors.joining("; "));
+
         String sceneDesc = switch (stylePreset) {
             case "street_shanghai" -> "chic minimal street style editorial on Shanghai Anfu Road, soft natural afternoon light, shallow depth of field";
             case "magazine_editorial" -> "high-fashion monochrome gallery lookbook editorial, architectural minimalism, crisp studio lighting";
             case "window_light" -> "warm minimalist indoor gallery near soft window daylight, clean cream and pure white studio backdrop";
             default -> "pure clean seamless white studio background, Alta Daily minimalist full-body lookbook photography, soft diffused fashion lighting";
         };
+        String sceneLabelZh = switch (stylePreset) {
+            case "street_shanghai" -> "安福路自然街拍";
+            case "magazine_editorial" -> "高奢杂志 Lookbook";
+            case "window_light" -> "画廊柔光大片";
+            default -> "极简纯白棚拍";
+        };
+
+        int heightCm = userPref.getHeightCm() != null ? userPref.getHeightCm() : 165;
+        String bodyShape = Objects.toString(userPref.getBodyShape(), "H型直筒");
+        String colorSeason = Objects.toString(userPref.getColorSeason(), "中性百搭");
+
+        // 4. Collect optional user model reference photo + ALL real garment cutouts for /images/edits or /chat/completions
+        List<MultimodalLlmClient.ReferenceImageInput> refInputs = new ArrayList<>();
+        boolean usedRefPhoto = false;
+        if (wantRef && creds.modelReferenceUrl() != null && !creds.modelReferenceUrl().isBlank()) {
+            StorageService.StoredImage refImg = storageService.readUserLocalUpload(userId, creds.modelReferenceUrl());
+            if (refImg != null) {
+                refInputs.add(new MultimodalLlmClient.ReferenceImageInput("model_reference.png", refImg.mimeType(), refImg.bytes()));
+                usedRefPhoto = true;
+            }
+        }
+        int attachedGarmentCount = 0;
+        for (OutfitDto.PlanSlotVo slot : allSlots) {
+            StorageService.StoredImage gImg = garmentImagesBySlot.get(slot.getSlotKey());
+            if (gImg != null) {
+                String ext = "image/png".equals(gImg.mimeType()) ? "png"
+                        : "image/webp".equals(gImg.mimeType()) ? "webp" : "jpg";
+                refInputs.add(new MultimodalLlmClient.ReferenceImageInput(
+                        "garment_" + slot.getSlotKey() + "." + ext, gImg.mimeType(), gImg.bytes()));
+                attachedGarmentCount++;
+            }
+        }
 
         StringBuilder prompt = new StringBuilder();
+        if (usedRefPhoto) {
+            prompt.append("Reference image 1 is the target person: keep their exact face, hairstyle, skin tone, and natural body proportions consistent. ");
+        }
+        if (attachedGarmentCount > 0) {
+            prompt.append("The garment reference images show the exact clothing pieces to wear — faithfully reproduce each piece's silhouette, neckline, collar, color shade, fabric texture, buttons, pockets, and footwear shape without redesigning them. ");
+        }
         prompt.append("Full-body minimalist fashion editorial lookbook photo of a stylish East Asian model (height around ")
-                .append(userPref.getHeightCm() != null ? userPref.getHeightCm() : 165)
-                .append("cm, silhouette tailored for ").append(Objects.toString(userPref.getBodyShape(), "H型直筒"))
-                .append(", color harmony for ").append(Objects.toString(userPref.getColorSeason(), "中性百搭"))
+                .append(heightCm)
+                .append("cm, silhouette tailored for ").append(bodyShape)
+                .append(", color harmony for ").append(colorSeason)
                 .append(") wearing this exact coordinated outfit: ")
                 .append(garmentDescriptions).append(". ")
                 .append("Setting: ").append(sceneDesc).append(". ")
@@ -1130,30 +1267,10 @@ public class OutfitRecommendationService {
         }
         prompt.append("Show complete head-to-toe silhouette, natural proportions, crisp fabric textures, ultra-clean commercial photography, no text or watermarks.");
 
-        // Collect optional user model reference photo + real uploaded garment images for /images/edits
-        List<MultimodalLlmClient.ReferenceImageInput> refInputs = new ArrayList<>();
-        boolean usedRefPhoto = false;
-        if (wantRef && creds.modelReferenceUrl() != null && !creds.modelReferenceUrl().isBlank()) {
-            StorageService.StoredImage refImg = storageService.readUserLocalUpload(userId, creds.modelReferenceUrl());
-            if (refImg != null) {
-                refInputs.add(new MultimodalLlmClient.ReferenceImageInput("model_reference.png", refImg.mimeType(), refImg.bytes()));
-                usedRefPhoto = true;
-                prompt.insert(0, "Keep the person's face, hairstyle and body proportions consistent with the first reference photo. ");
-            }
-        }
-        int garmentImgCount = 0;
-        for (OutfitDto.PlanSlotVo slot : planVo.getSlots()) {
-            if (garmentImgCount >= 2) break;
-            String url = slot.getItem().getProcessedImageUrl();
-            if (url != null && url.startsWith("/uploads/user_" + userId + "/")) {
-                StorageService.StoredImage gImg = storageService.readUserLocalUpload(userId, url);
-                if (gImg != null) {
-                    refInputs.add(new MultimodalLlmClient.ReferenceImageInput(
-                            "garment_" + slot.getSlotKey() + ".png", gImg.mimeType(), gImg.bytes()));
-                    garmentImgCount++;
-                }
-            }
-        }
+        String overallPaletteZh = (vlmOverallPalette != null && !vlmOverallPalette.isBlank())
+                ? vlmOverallPalette
+                : buildFallbackOverallPalette(allSlots);
+        String bodyProfileZh = heightCm + "cm · " + bodyShape + " · " + colorSeason;
 
         if (creds.active()) {
             try {
@@ -1171,6 +1288,29 @@ public class OutfitRecommendationService {
 
                 boolean refApplied = usedRefPhoto && gen.endpointUsed() != null
                         && (gen.endpointUsed().startsWith("/images/edits") || gen.endpointUsed().startsWith("/chat/completions"));
+                boolean garmentsAppliedInGen = attachedGarmentCount > 0 && gen.endpointUsed() != null
+                        && (gen.endpointUsed().startsWith("/images/edits") || gen.endpointUsed().startsWith("/chat/completions"));
+
+                OutfitDto.TryOnVisualReportVo visualReport = OutfitDto.TryOnVisualReportVo.builder()
+                        .usedRealVlm(usedVlmVisualExtraction)
+                        .referencedGarmentCount(garmentImagesBySlot.size())
+                        .usedGarmentImagesInGen(garmentsAppliedInGen)
+                        .overallPalette(overallPaletteZh)
+                        .bodyProfile(bodyProfileZh)
+                        .sceneLabel(sceneLabelZh)
+                        .pieces(pieceFeatures)
+                        .build();
+
+                String noticeMsg;
+                if (garmentsAppliedInGen) {
+                    noticeMsg = "已直接携带本套 " + attachedGarmentCount + " 件单品原图与 VLM 视觉特征（"
+                            + creds.imageModel() + " · " + gen.endpointUsed() + "）完成高保真上身融合";
+                } else if (usedVlmVisualExtraction) {
+                    noticeMsg = "已通过 VLM 看图提取 " + garmentImagesBySlot.size() + " 件单品精细版型/面料特征并注入生图（"
+                            + creds.imageModel() + " · " + gen.endpointUsed() + "）";
+                } else {
+                    noticeMsg = "已通过服务端生图接口（" + creds.imageModel() + " · " + gen.endpointUsed() + "）生成上身杂志预览图";
+                }
 
                 return OutfitDto.TryOnResultVo.builder()
                         .planId(planId)
@@ -1180,7 +1320,8 @@ public class OutfitRecommendationService {
                         .modelUsed(creds.imageModel())
                         .endpointUsed(gen.endpointUsed())
                         .promptUsed(prompt.toString())
-                        .notice("已通过服务端生图接口（" + creds.imageModel() + " · " + gen.endpointUsed() + "）生成上身杂志预览图")
+                        .visualReport(visualReport)
+                        .notice(noticeMsg)
                         .build();
             } catch (Exception e) {
                 log.warn("Real image model try-on failed ({}), degrading to curated editorial preview", e.getMessage());
@@ -1191,6 +1332,15 @@ public class OutfitRecommendationService {
                 String hint = errMsg.contains("HTTP 524") || errMsg.contains("HTTP 504")
                         ? "上游反代/CDN 等待超时（" + errMsg + "）：生图实际耗时约 25s，超过了域名网关/CDN 的 15s 超时限制；建议在 Base URL 改用直连地址或调大反代超时时间。"
                         : "上游生图接口返回异常（" + errMsg + "），已平滑降级为匹配该色系的杂志上身示意样片";
+                OutfitDto.TryOnVisualReportVo fallbackReport = OutfitDto.TryOnVisualReportVo.builder()
+                        .usedRealVlm(usedVlmVisualExtraction)
+                        .referencedGarmentCount(garmentImagesBySlot.size())
+                        .usedGarmentImagesInGen(false)
+                        .overallPalette(overallPaletteZh)
+                        .bodyProfile(bodyProfileZh)
+                        .sceneLabel(sceneLabelZh)
+                        .pieces(pieceFeatures)
+                        .build();
                 return OutfitDto.TryOnResultVo.builder()
                         .planId(planId)
                         .previewImageUrl(fallbackUrl)
@@ -1199,6 +1349,7 @@ public class OutfitRecommendationService {
                         .modelUsed(creds.imageModel())
                         .endpointUsed("editorial_fallback")
                         .promptUsed(prompt.toString())
+                        .visualReport(fallbackReport)
                         .notice(hint)
                         .build();
             }
@@ -1208,6 +1359,15 @@ public class OutfitRecommendationService {
         String fallbackUrl = pickCuratedEditorialFallback(planVo);
         plan.setTryOnImageUrl(fallbackUrl);
         outfitPlanMapper.updateById(plan);
+        OutfitDto.TryOnVisualReportVo offlineReport = OutfitDto.TryOnVisualReportVo.builder()
+                .usedRealVlm(false)
+                .referencedGarmentCount(garmentImagesBySlot.size())
+                .usedGarmentImagesInGen(false)
+                .overallPalette(overallPaletteZh)
+                .bodyProfile(bodyProfileZh)
+                .sceneLabel(sceneLabelZh)
+                .pieces(pieceFeatures)
+                .build();
         return OutfitDto.TryOnResultVo.builder()
                 .planId(planId)
                 .previewImageUrl(fallbackUrl)
@@ -1216,8 +1376,48 @@ public class OutfitRecommendationService {
                 .modelUsed(creds.imageModel())
                 .endpointUsed("editorial_fallback")
                 .promptUsed(prompt.toString())
-                .notice("尚未配置支持生图的中转站 API Key，当前展示匹配本套色系与风格的杂志示意样片；前往「我的 → AI 配置」填好 Key 即可实时生成真实上身大片")
+                .visualReport(offlineReport)
+                .notice("尚未配置支持生图的中转站 API Key，当前展示匹配本套色系与风格的杂志示意样片；前往「我的 → AI 配置」填好 Key 即可实时激活 VLM 视觉反推与真机生图")
                 .build();
+    }
+
+    private String buildFallbackZhSummary(OutfitDto.PlanSlotVo slot) {
+        WardrobeDto.ItemVo item = slot.getItem();
+        String color = Objects.toString(item.getColor(), "").trim();
+        String material = Objects.toString(item.getMaterial(), "").trim();
+        String tags = item.getStyleTags() != null && !item.getStyleTags().isEmpty()
+                ? String.join(" · ", item.getStyleTags().subList(0, Math.min(2, item.getStyleTags().size())))
+                : "";
+        List<String> parts = new ArrayList<>();
+        if (!color.isBlank()) parts.add(color + "色调");
+        if (!material.isBlank()) parts.add(material + "质感");
+        if (!tags.isBlank()) parts.add(tags);
+        if (parts.isEmpty()) {
+            return Objects.toString(item.getName(), slot.getSlotLabel());
+        }
+        return String.join(" · ", parts);
+    }
+
+    private String buildFallbackEnPrompt(OutfitDto.PlanSlotVo slot) {
+        WardrobeDto.ItemVo item = slot.getItem();
+        String color = Objects.toString(item.getColor(), "").trim();
+        String name = Objects.toString(item.getName(), "").trim();
+        String material = Objects.toString(item.getMaterial(), "").trim();
+        String matPart = material.isBlank() ? "" : " in " + material;
+        return color + " " + name + matPart + ", clean tailored silhouette faithful to the garment photo";
+    }
+
+    private String buildFallbackOverallPalette(List<OutfitDto.PlanSlotVo> slots) {
+        String colors = slots.stream()
+                .map(s -> s.getItem() != null ? s.getItem().getColor() : null)
+                .filter(c -> c != null && !c.isBlank())
+                .distinct()
+                .limit(4)
+                .collect(Collectors.joining(" + "));
+        if (colors.isBlank()) {
+            return "极简中性色调层次搭配，视觉干净平衡";
+        }
+        return "以「" + colors + "」构成柔和和谐的画廊级色彩层次";
     }
 
     private String pickCuratedEditorialFallback(OutfitDto.PlanVo planVo) {
@@ -1415,6 +1615,28 @@ public class OutfitRecommendationService {
 
     private void pickBest(List<ScoredItem> scored, List<WardrobeItem> all, Map<String, WardrobeItem> chosen,
                           String cat, String prefer1, String prefer2) {
+        pickBest(scored, all, chosen, cat, prefer1, prefer2, Collections.emptySet());
+    }
+
+    private void pickBest(List<ScoredItem> scored, List<WardrobeItem> all, Map<String, WardrobeItem> chosen,
+                          String cat, String prefer1, String prefer2, Set<Long> excludeSet) {
+        if (excludeSet != null && !excludeSet.isEmpty()) {
+            Optional<WardrobeItem> freshScored = scored.stream()
+                    .map(s -> s.item)
+                    .filter(i -> cat.equals(i.getCategory()) && !excludeSet.contains(i.getId()))
+                    .findFirst();
+            if (freshScored.isPresent()) {
+                chosen.put(cat, freshScored.get());
+                return;
+            }
+            Optional<WardrobeItem> freshAll = all.stream()
+                    .filter(i -> cat.equals(i.getCategory()) && !excludeSet.contains(i.getId()))
+                    .findFirst();
+            if (freshAll.isPresent()) {
+                chosen.put(cat, freshAll.get());
+                return;
+            }
+        }
         Optional<WardrobeItem> preferred = findMatch(all, cat, prefer1, prefer2);
         if (preferred.isPresent()) {
             chosen.put(cat, preferred.get());
