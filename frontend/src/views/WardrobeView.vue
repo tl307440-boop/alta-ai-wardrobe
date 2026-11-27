@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { useWardrobeStore } from '@/stores/wardrobe';
 import { useLookbookStore } from '@/stores/lookbook';
 import { useToastStore } from '@/stores/toast';
-import { CATEGORY_OPTIONS, COLOR_SWATCHES, categoryLabel } from '@/utils/constants';
+import { CATEGORY_OPTIONS, COLOR_SWATCHES, categoryLabel, resolveWardrobeSubGroup } from '@/utils/constants';
 import type { WardrobeItem } from '@/types';
 import AppIcon from '@/components/AppIcon.vue';
 import GarmentVisual from '@/components/GarmentVisual.vue';
@@ -25,6 +25,7 @@ const toast = useToastStore();
 
 const filter = reactive({
   category: 'all',
+  subGroup: 'all',
   color: 'all',
   keyword: '',
   sortBy: 'recent' as SortKey,
@@ -32,6 +33,30 @@ const filter = reactive({
 
 const filterOpen = ref(false);
 const stylingItemId = ref<number | null>(null);
+
+function selectCategory(key: string) {
+  filter.category = key;
+  filter.subGroup = 'all';
+}
+
+const subGroupOptions = computed(() => {
+  if (filter.category === 'all') return [] as Array<{ key: string; label: string; count: number }>;
+  const inCat = wardrobeStore.items.filter((item) => item.category === filter.category);
+  const counts = new Map<string, number>();
+  for (const item of inCat) {
+    const group = resolveWardrobeSubGroup(item);
+    if (group) {
+      counts.set(group, (counts.get(group) || 0) + 1);
+    }
+  }
+  return Array.from(counts.entries()).map(([key, count]) => ({ key, label: key, count }));
+});
+
+const categoryScopedCount = computed(() =>
+  filter.category === 'all'
+    ? wardrobeStore.items.length
+    : wardrobeStore.items.filter((item) => item.category === filter.category).length
+);
 
 // 面板内的筛选项（色系 + 排序）数量，用于按钮角标
 const activeFilterCount = computed(
@@ -49,10 +74,13 @@ function effectiveCpw(item: WardrobeItem): number | null {
 const filteredWardrobe = computed(() => {
   const list = wardrobeStore.items.filter((item) => {
     if (filter.category !== 'all' && item.category !== filter.category) return false;
+    if (filter.category !== 'all' && filter.subGroup !== 'all') {
+      if (resolveWardrobeSubGroup(item) !== filter.subGroup) return false;
+    }
     if (filter.color !== 'all' && item.color !== filter.color) return false;
     if (filter.keyword.trim()) {
       const kw = filter.keyword.trim().toLowerCase();
-      const hay = `${item.name} ${item.color} ${categoryLabel(item.category)} ${(item.styleTags || []).join(' ')}`.toLowerCase();
+      const hay = `${item.name} ${item.subCategory || ''} ${item.color} ${categoryLabel(item.category)} ${(item.styleTags || []).join(' ')}`.toLowerCase();
       if (!hay.includes(kw)) return false;
     }
     return true;
@@ -82,6 +110,7 @@ function resetPanelFilters() {
 
 function resetFilters() {
   filter.category = 'all';
+  filter.subGroup = 'all';
   filter.keyword = '';
   resetPanelFilters();
 }
@@ -140,7 +169,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           <button
             role="tab"
             :aria-selected="filter.category === 'all'"
-            @click="filter.category = 'all'"
+            @click="selectCategory('all')"
             class="px-3.5 py-1.5 rounded-full text-[13px] font-medium whitespace-nowrap transition"
             :class="filter.category === 'all' ? 'bg-black text-white' : 'bg-[#F2F2F2] text-[#333333] hover:bg-[#E5E5E5]'"
           >
@@ -151,7 +180,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
             :key="cat.key"
             role="tab"
             :aria-selected="filter.category === cat.key"
-            @click="filter.category = cat.key"
+            @click="selectCategory(cat.key)"
             class="px-3.5 py-1.5 rounded-full text-[13px] font-medium whitespace-nowrap transition"
             :class="filter.category === cat.key ? 'bg-black text-white' : 'bg-[#F2F2F2] text-[#333333] hover:bg-[#E5E5E5]'"
           >
@@ -194,6 +223,38 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           </span>
         </button>
       </div>
+    </div>
+
+    <!-- On-demand lightweight sub-category micro-pills (only when active category spans >1 subgroup) -->
+    <div
+      v-if="filter.category !== 'all' && subGroupOptions.length > 1"
+      class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5"
+      aria-label="细分子类"
+    >
+      <button
+        @click="filter.subGroup = 'all'"
+        class="px-3 py-1 rounded-full text-[12px] font-medium whitespace-nowrap transition border"
+        :class="
+          filter.subGroup === 'all'
+            ? 'bg-black text-white border-black'
+            : 'bg-white text-[#555555] border-black/[0.08] hover:border-black/25 hover:text-black'
+        "
+      >
+        全部 ({{ categoryScopedCount }})
+      </button>
+      <button
+        v-for="sub in subGroupOptions"
+        :key="sub.key"
+        @click="filter.subGroup = sub.key"
+        class="px-3 py-1 rounded-full text-[12px] font-medium whitespace-nowrap transition border"
+        :class="
+          filter.subGroup === sub.key
+            ? 'bg-black text-white border-black'
+            : 'bg-white text-[#555555] border-black/[0.08] hover:border-black/25 hover:text-black'
+        "
+      >
+        {{ sub.label }} ({{ sub.count }})
+      </button>
     </div>
 
     <!-- Garment Catalog Grid -->

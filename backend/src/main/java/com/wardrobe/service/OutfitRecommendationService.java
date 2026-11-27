@@ -38,14 +38,164 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class OutfitRecommendationService {
-    private static final List<String> SLOT_ORDER = List.of("outerwear", "top", "bottom", "shoes", "accessory");
+    private static final List<String> SLOT_ORDER = List.of("outerwear", "top", "dress", "bottom", "shoes", "bag", "accessory");
     private static final Map<String, String> SLOT_LABELS = Map.of(
             "outerwear", "外套",
             "top", "上衣",
+            "dress", "连衣裙",
             "bottom", "下装",
             "shoes", "鞋履",
-            "accessory", "包配"
+            "bag", "包袋",
+            "accessory", "配饰"
     );
+
+    private record StyleCluster(
+            String key,
+            String displayTitle,
+            List<String> triggers,
+            List<String> positives,
+            List<String> negatives
+    ) {}
+
+    private static final List<StyleCluster> STYLE_CLUSTERS = List.of(
+            new StyleCluster(
+                    "sweet_lolita",
+                    "甜美少女 · 可爱萝莉",
+                    List.of("可爱", "萝莉", "甜妹", "甜美", "洛丽塔", "lolita", "公主", "蝴蝶结", "蓬蓬", "芭蕾", "少女", "jsk", "千金", "草莓"),
+                    List.of("甜美", "洛丽塔", "lolita", "萝莉", "草莓", "蕾丝", "蝴蝶结", "芭蕾", "蓬蓬", "仙女", "柔粉", "娃娃领", "千金", "毛领", "玛丽珍", "甜心", "粉"),
+                    List.of("暗黑", "哥特", "辣妹", "细条纹", "微喇", "西装", "通勤", "职场", "西裤", "机车", "工装", "漆皮", "鱼骨", "束腰性感", "冷淡")
+            ),
+            new StyleCluster(
+                    "dark_gothic",
+                    "暗黑哥特 · 氛围美学",
+                    List.of("暗黑", "哥特", "暗夜", "废土", "y2k", "暗黑系"),
+                    List.of("暗黑", "哥特", "银黑", "提花", "暗夜", "漆皮", "黑丝绒", "金属", "银链", "暗纹", "冷峻", "酷"),
+                    List.of("草莓", "柔粉", "清新", "田园", "碎花", "可爱", "芭蕾", "甜妹")
+            ),
+            new StyleCluster(
+                    "hot_girl",
+                    "高街甜酷 · 辣妹出街",
+                    List.of("辣妹", "甜辣", "性感", "夜店", "派对", "蹦迪", "炸街", "纯欲", "暴露", "撩人", "骚", "丝袜", "黑丝", "渔网", "过膝袜", "露背", "镂空", "深v", "超短裙"),
+                    List.of("辣妹", "性感", "纯欲", "束腰", "包臀", "微喇", "细条纹", "漆皮", "鱼骨", "露背", "镂空", "超短裙", "短裙", "高跟", "礼服", "吊带", "挂脖", "绑带", "深v", "方领", "显瘦", "丝袜", "黑丝", "渔网", "过膝丝袜", "蕾丝", "堆堆袜"),
+                    List.of("宽松", "老干部", "职场西装", "奶奶", "田园", "娃娃领", "草莓", "洛丽塔")
+            ),
+            new StyleCluster(
+                    "jk_uniform",
+                    "日系甜欲 · JK制服",
+                    List.of("jk", "水手服", "校服", "堆堆袜", "格裙", "百褶短裙"),
+                    List.of("jk", "水手服", "百褶", "格裙", "格纹", "堆堆袜", "黑丝", "丝袜", "过膝丝袜", "领结", "乐福", "玛丽珍", "学院", "日系", "纯欲"),
+                    List.of("拖地", "阔腿裤", "长款礼服", "西装大衣", "过膝长靴", "工装", "老干部")
+            ),
+            new StyleCluster(
+                    "interview_office",
+                    "利落松弛 · 职场通勤",
+                    List.of("面试", "职场", "通勤", "上班", "会议", "商务", "精神", "干练", "ol"),
+                    List.of("西装", "衬衫", "通勤", "面试", "阔腿", "乐福", "托特", "风衣", "利落", "极简", "知性", "直筒", "醋酸"),
+                    List.of("洛丽塔", "lolita", "哥特", "暗黑", "亮片", "漆皮", "鱼骨", "露背", "蓬蓬", "草莓")
+            ),
+            new StyleCluster(
+                    "gentle_date",
+                    "温柔氛围 · 轻熟约会",
+                    List.of("约会", "温柔", "韩系", "法式", "初恋", "下午茶", "看展", "画廊", "千金"),
+                    List.of("温柔", "约会", "开衫", "连衣裙", "半身裙", "针织", "燕麦", "米", "珍珠", "千金", "法式", "韩系", "仙女", "裸杏", "软糯", "马鞍"),
+                    List.of("工装", "冲锋衣", "机车", "暗黑", "哥特", "漆皮")
+            ),
+            new StyleCluster(
+                    "casual_retro",
+                    "周末松弛 · 复古休闲",
+                    List.of("咖啡", "周末", "休闲", "松弛", "日常", "美拉德", "复古", "逛街", "clean"),
+                    List.of("休闲", "clean", "牛仔", "德训", "复古", "美拉德", "卫衣", "针织", "白t", "帆布", "直筒", "松弛", "麂皮"),
+                    List.of("礼服", "重工亮片", "漆皮鱼骨", "哥特", "洛丽塔")
+            )
+    );
+
+    public static boolean isOnePieceEntity(WardrobeItem item) {
+        if (item == null) return false;
+        return isOnePieceMeta(item.getCategory(), item.getSubCategory(), item.getName(), item.getStyleTags());
+    }
+
+    public static boolean isOnePieceMeta(String category, String subCategory, String name, String styleTags) {
+        String cat = Objects.toString(category, "").trim().toLowerCase(Locale.ROOT);
+        if ("dress".equals(cat)) {
+            return true;
+        }
+        String sub = Objects.toString(subCategory, "").toLowerCase(Locale.ROOT);
+        String nm = Objects.toString(name, "").toLowerCase(Locale.ROOT);
+        String tags = Objects.toString(styleTags, "").toLowerCase(Locale.ROOT);
+        String combined = sub + " " + nm + " " + tags;
+        // Half-skirts belong to bottom slot and pair with tops, never treated as one-piece dresses
+        if ((sub.contains("半身裙") || sub.contains("半裙") || nm.contains("半身裙") || nm.contains("半裙"))
+                && !nm.contains("连衣裙") && !nm.contains("连体") && !nm.contains("背带裙") && !nm.contains("jsk")) {
+            return false;
+        }
+        if ("bottom".equals(cat) && !nm.contains("连衣裙") && !nm.contains("背带裤") && !nm.contains("连体")) {
+            return false;
+        }
+        if (combined.contains("连衣裙") || combined.contains("jsk") || combined.contains("连体裤")
+                || combined.contains("连体衣") || combined.contains("背带裤") || combined.contains("背带裙")
+                || combined.contains("礼服裙") || combined.contains("洛丽塔裙") || combined.contains("lolita裙")
+                || sub.contains("连衣裙")) {
+            return true;
+        }
+        // Seeded or user-uploaded full dresses stored under category="top" whose name/subCategory identifies a dress/skirt silhouette
+        return "top".equals(cat) && (nm.endsWith("裙") || sub.endsWith("裙")
+                || nm.contains("短裙") || nm.contains("长裙") || nm.contains("礼服"));
+    }
+
+    public static boolean isHosieryEntity(WardrobeItem item) {
+        if (item == null) return false;
+        String txt = (Objects.toString(item.getName(), "") + " " + Objects.toString(item.getSubCategory(), "")).toLowerCase(Locale.ROOT);
+        return txt.contains("丝袜") || txt.contains("黑丝") || txt.contains("渔网")
+                || txt.contains("过膝袜") || txt.contains("吊带袜") || txt.contains("堆堆袜")
+                || txt.contains("连裤袜") || txt.contains("长筒袜") || txt.contains("袜");
+    }
+
+    private static boolean isLongTrousers(WardrobeItem item) {
+        if (item == null) return false;
+        String txt = (Objects.toString(item.getName(), "") + " " + Objects.toString(item.getSubCategory(), "")).toLowerCase(Locale.ROOT);
+        return txt.contains("裤") && !txt.contains("短裤") && !txt.contains("裙");
+    }
+
+    private List<StyleCluster> detectActiveClusters(String scene, String userQuery) {
+        String combined = (Objects.toString(scene, "") + " " + Objects.toString(userQuery, "")).toLowerCase(Locale.ROOT).trim();
+        if (combined.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<StyleCluster> matched = new ArrayList<>();
+        for (StyleCluster cluster : STYLE_CLUSTERS) {
+            if (cluster.triggers().stream().anyMatch(combined::contains)) {
+                matched.add(cluster);
+            }
+        }
+        return matched;
+    }
+
+    private List<String> extractQueryTokens(String text) {
+        String raw = Objects.toString(text, "").toLowerCase(Locale.ROOT).trim();
+        if (raw.isBlank()) return Collections.emptyList();
+        Set<String> tokens = new LinkedHashSet<>();
+        for (String part : raw.split("[\\s,，。、·/|]+")) {
+            String p = part.trim();
+            if (p.length() >= 2) {
+                tokens.add(p);
+                // Extract 2-char CJK bigrams for fine-grained matching (e.g. "可爱萝莉" -> "可爱", "爱萝", "萝莉")
+                if (p.length() > 2 && p.length() <= 8) {
+                    for (int i = 0; i <= p.length() - 2; i++) {
+                        tokens.add(p.substring(i, i + 2));
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(tokens);
+    }
+
+    private String buildItemSearchHaystack(WardrobeItem item) {
+        return (Objects.toString(item.getName(), "") + " "
+                + Objects.toString(item.getSubCategory(), "") + " "
+                + Objects.toString(item.getColor(), "") + " "
+                + Objects.toString(item.getMaterial(), "") + " "
+                + Objects.toString(item.getStyleTags(), "")).toLowerCase(Locale.ROOT);
+    }
 
     private final WardrobeItemMapper wardrobeItemMapper;
     private final OutfitPlanMapper outfitPlanMapper;
@@ -92,7 +242,8 @@ public class OutfitRecommendationService {
         boolean reviveIdle = Boolean.TRUE.equals(req.getReviveIdle());
         Set<Long> excludeSet = req.getExcludeItemIds() != null
                 ? new HashSet<>(req.getExcludeItemIds()) : Collections.emptySet();
-        List<ScoredItem> scored = scoreWardrobeItems(wardrobe, pref, weather.getTemp(), scene, recentWearCounts, reviveIdle, excludeSet);
+        List<ScoredItem> scored = scoreWardrobeItems(
+                wardrobe, pref, weather.getTemp(), scene, req.getUserQuery(), recentWearCounts, reviveIdle, excludeSet);
 
         // Handle multi-turn refinement on an existing plan
         OutfitPlan basePlan = null;
@@ -180,6 +331,14 @@ public class OutfitRecommendationService {
     public List<ScoredItem> scoreWardrobeItems(List<WardrobeItem> wardrobe, UserPreference pref, int temp,
                                                String scene, Map<Long, Integer> recentWearCounts,
                                                boolean reviveIdle, Set<Long> excludeItemIds) {
+        return scoreWardrobeItems(wardrobe, pref, temp, scene, null, recentWearCounts, reviveIdle, excludeItemIds);
+    }
+
+    public List<ScoredItem> scoreWardrobeItems(List<WardrobeItem> wardrobe, UserPreference pref, int temp,
+                                               String scene, String userQuery, Map<Long, Integer> recentWearCounts,
+                                               boolean reviveIdle, Set<Long> excludeItemIds) {
+        List<StyleCluster> activeClusters = detectActiveClusters(scene, userQuery);
+        List<String> queryTokens = extractQueryTokens(userQuery);
         List<String> favStyles = jsonUtils.toStringList(pref.getFavoriteStyles());
         List<String> favColors = jsonUtils.toStringList(pref.getFavoriteColors());
         List<String> dislikedColors = jsonUtils.toStringList(pref.getDislikedColors());
@@ -211,9 +370,14 @@ public class OutfitRecommendationService {
             double learnedColorDelta = item.getColor() != null
                     ? learnedColorScores.getOrDefault(item.getColor().trim(), 0.0) : 0.0;
             double colorPref = Math.max(0.10, Math.min(1.15, baseColorPref + learnedColorDelta));
-            double sceneMatch = computeSceneMatch(item, scene);
+            double sceneMatch = computeSceneMatch(item, scene, userQuery, activeClusters, queryTokens);
+            double aestheticGate = computeAestheticGate(item, activeClusters, queryTokens);
 
-            double affinity = 0.35 * stylePref + 0.25 * colorPref + 0.40 * sceneMatch;
+            boolean hasIntent = (activeClusters != null && !activeClusters.isEmpty())
+                    || (queryTokens != null && !queryTokens.isEmpty());
+            double affinity = hasIntent
+                    ? (0.20 * stylePref + 0.16 * colorPref + 0.64 * sceneMatch)
+                    : (0.35 * stylePref + 0.25 * colorPref + 0.40 * sceneMatch);
             // Seasonal Color Analysis harmony bonus
             if (item.getColor() != null && seasonPalette.contains(item.getColor())) {
                 affinity += 0.08;
@@ -235,8 +399,8 @@ public class OutfitRecommendationService {
                 affinity -= 0.35;
             }
 
-            double total = weatherFactor * seasonFactor * recencyFactor * colorGate * Math.max(0.05, affinity);
-            result.add(new ScoredItem(item, Math.max(0.0, Math.min(1.0, total))));
+            double total = weatherFactor * seasonFactor * recencyFactor * colorGate * aestheticGate * Math.max(0.05, affinity);
+            result.add(new ScoredItem(item, Math.max(0.0, Math.min(2.0, total))));
         }
 
         result.sort((a, b) -> Double.compare(b.score, a.score));
@@ -348,28 +512,83 @@ public class OutfitRecommendationService {
     }
 
     private double computeSceneMatch(WardrobeItem item, String scene) {
-        String s = Objects.toString(scene, "");
-        String hay = (Objects.toString(item.getName(), "") + " " + Objects.toString(item.getStyleTags(), "")).toLowerCase();
-        if (s.contains("面试") || s.contains("职场")) {
-            if (hay.contains("西装") || hay.contains("面试") || hay.contains("通勤") || hay.contains("乐福") || hay.contains("托特")) return 1.0;
-            return 0.65;
+        return computeSceneMatch(item, scene, scene, detectActiveClusters(scene, null), extractQueryTokens(scene));
+    }
+
+    private double computeSceneMatch(WardrobeItem item, String scene, String userQuery,
+                                   List<StyleCluster> activeClusters, List<String> queryTokens) {
+        String hay = buildItemSearchHaystack(item);
+        if (activeClusters != null && !activeClusters.isEmpty()) {
+            long posHits = activeClusters.stream()
+                    .flatMap(c -> c.positives().stream())
+                    .distinct()
+                    .filter(hay::contains)
+                    .count();
+            long negHits = activeClusters.stream()
+                    .flatMap(c -> c.negatives().stream())
+                    .distinct()
+                    .filter(hay::contains)
+                    .count();
+            long tokenHits = queryTokens != null
+                    ? queryTokens.stream().filter(hay::contains).count() : 0;
+            if (negHits > 0) {
+                return Math.max(0.15, 0.40 - negHits * 0.08);
+            }
+            if (posHits > 0 || tokenHits > 0) {
+                return Math.min(1.15, 0.85 + posHits * 0.08 + tokenHits * 0.06);
+            }
+            return 0.62;
         }
-        if (s.contains("约会") || s.contains("温柔")) {
-            if (hay.contains("温柔") || hay.contains("约会") || hay.contains("裙") || hay.contains("开衫") || hay.contains("马鞍")) return 1.0;
+        String q = Objects.toString(userQuery, "").trim();
+        if (!q.isBlank() && queryTokens != null && !queryTokens.isEmpty()) {
+            long hits = queryTokens.stream().filter(hay::contains).count();
+            if (hits > 0) return Math.min(1.10, 0.85 + hits * 0.08);
             return 0.65;
-        }
-        if (s.contains("咖啡") || s.contains("休闲")) {
-            if (hay.contains("休闲") || hay.contains("clean") || hay.contains("牛仔") || hay.contains("德训") || hay.contains("美拉德")) return 1.0;
-            return 0.70;
         }
         return 0.80;
+    }
+
+    private double computeAestheticGate(WardrobeItem item, List<StyleCluster> activeClusters, List<String> queryTokens) {
+        String hay = buildItemSearchHaystack(item);
+        double gate = 1.0;
+        if (activeClusters != null && !activeClusters.isEmpty()) {
+            long posHits = activeClusters.stream()
+                    .flatMap(c -> c.positives().stream())
+                    .distinct()
+                    .filter(hay::contains)
+                    .count();
+            long negHits = activeClusters.stream()
+                    .flatMap(c -> c.negatives().stream())
+                    .distinct()
+                    .filter(hay::contains)
+                    .count();
+            if (negHits > 0) {
+                // Explicit sub-aesthetic clash (e.g. gothic/hot-girl item under sweet Lolita query)
+                gate = negHits >= 2 ? 0.22 : 0.36;
+            } else if (posHits >= 4) {
+                gate = Math.min(1.85, 1.62 + (posHits - 4) * 0.06);
+            } else if (posHits >= 2) {
+                gate = 1.32 + (posHits - 2) * 0.12;
+            } else if (posHits == 1) {
+                gate = 1.12;
+            } else {
+                gate = 0.78;
+            }
+        }
+        if (queryTokens != null && !queryTokens.isEmpty()) {
+            long tokenHits = queryTokens.stream().filter(hay::contains).count();
+            if (tokenHits > 0 && gate >= 0.78) {
+                gate = Math.min(1.95, gate + Math.min(0.24, tokenHits * 0.08));
+            }
+        }
+        return gate;
     }
 
     private StylistOutput callLlmStylist(Long userId, AiConfigService.ResolvedAiCredentials creds, List<ScoredItem> scored,
                                          WeatherVo weather, String scene, OutfitDto.RecommendRequest req,
                                          WardrobeItem anchor, OutfitPlan basePlan, UserPreference pref, BigDecimal budget) {
         // Select top <=12 role-diverse items for High-Res Visual Contact Sheet (anchor always first)
-        List<WardrobeItem> sheetItems = selectDiverseContactSheetItems(scored, anchor, weather.getTemp(), 12);
+        List<WardrobeItem> sheetItems = selectDiverseContactSheetItems(scored, anchor, weather.getTemp(), req.getUserQuery(), 12);
         OutfitContactSheetService.ContactSheet sheet = contactSheetService.buildContactSheet(userId, sheetItems);
         Map<Long, String> idToSheetTag = new HashMap<>();
         if (sheet != null && sheet.tagToItemId() != null) {
@@ -386,10 +605,11 @@ public class OutfitRecommendationService {
             }
             m.put("name", si.item.getName());
             m.put("category", si.item.getCategory());
+            m.put("one_piece_dress", isOnePieceEntity(si.item));
             m.put("color", si.item.getColor());
             m.put("material", Objects.toString(si.item.getMaterial(), ""));
             m.put("styleTags", jsonUtils.toStringList(si.item.getStyleTags()));
-            m.put("score", Math.round(si.score * 100));
+            m.put("score", Math.min(100L, Math.round(si.score * 100)));
             return m;
         }).collect(Collectors.toList());
 
@@ -487,32 +707,47 @@ public class OutfitRecommendationService {
     }
 
     private List<Long> sanitizeSelectedIds(List<Long> rawIds, Map<Long, WardrobeItem> itemById, Long anchorId) {
-        Map<String, Long> byCategory = new LinkedHashMap<>();
-        boolean hasDress = false;
+        Map<String, Long> bySlot = new LinkedHashMap<>();
+        Long dressId = null;
         for (Long id : rawIds) {
             WardrobeItem item = itemById.get(id);
             if (item == null) continue;
-            String cat = Objects.toString(item.getCategory(), "top");
-            String name = Objects.toString(item.getName(), "");
-            boolean isDress = "dress".equalsIgnoreCase(cat) || name.contains("连衣裙");
-            if (isDress) {
-                hasDress = true;
+            boolean onePiece = isOnePieceEntity(item);
+            String slot = onePiece ? "dress" : Objects.toString(item.getCategory(), "top");
+            if (onePiece) {
+                if (dressId == null || Objects.equals(id, anchorId)) {
+                    dressId = id;
+                    bySlot.put("dress", id);
+                }
+                continue;
             }
-            if (!byCategory.containsKey(cat) || Objects.equals(id, anchorId)) {
-                byCategory.put(cat, id);
-            }
-        }
-        if (hasDress) {
-            Long topId = byCategory.get("top");
-            Long bottomId = byCategory.get("bottom");
-            if (topId != null && !Objects.equals(topId, anchorId) && !Objects.toString(itemById.get(topId).getName(), "").contains("连衣裙")) {
-                byCategory.remove("top");
-            }
-            if (bottomId != null && !Objects.equals(bottomId, anchorId) && !Objects.toString(itemById.get(bottomId).getName(), "").contains("连衣裙")) {
-                byCategory.remove("bottom");
+            if (!bySlot.containsKey(slot) || Objects.equals(id, anchorId)) {
+                bySlot.put(slot, id);
             }
         }
-        return new ArrayList<>(byCategory.values());
+        if (dressId != null) {
+            Long topId = bySlot.get("top");
+            Long bottomId = bySlot.get("bottom");
+            boolean anchorIsBottomOrTop = (bottomId != null && Objects.equals(bottomId, anchorId))
+                    || (topId != null && Objects.equals(topId, anchorId));
+            if (anchorIsBottomOrTop && !Objects.equals(dressId, anchorId)) {
+                bySlot.remove("dress");
+            } else {
+                bySlot.remove("top");
+                bySlot.remove("bottom");
+            }
+        }
+        return orderedSlotIdsFromMap(bySlot);
+    }
+
+    private List<Long> orderedSlotIdsFromMap(Map<String, Long> bySlot) {
+        List<Long> ordered = new ArrayList<>();
+        for (String slot : SLOT_ORDER) {
+            if (bySlot.containsKey(slot)) {
+                ordered.add(bySlot.get(slot));
+            }
+        }
+        return ordered;
     }
 
     private StylistOutput deterministicStylist(List<WardrobeItem> wardrobe, List<ScoredItem> scored, WeatherVo weather,
@@ -554,11 +789,42 @@ public class OutfitRecommendationService {
         }
 
         if ("anchor_item".equals(triggerType) && anchor != null) {
-            chosen.put(anchor.getCategory(), anchor);
+            boolean anchorOnePiece = isOnePieceEntity(anchor);
+            String anchorSlot = anchorOnePiece ? "dress" : Objects.toString(anchor.getCategory(), "top");
+            chosen.put(anchorSlot, anchor);
+
+            boolean preferDress = "dress".equals(anchorSlot);
+            if (!preferDress && !"top".equals(anchorSlot) && !"bottom".equals(anchorSlot)) {
+                ScoredItem bestTop = scored.stream()
+                        .filter(s -> "top".equalsIgnoreCase(s.item.getCategory()) && !isOnePieceEntity(s.item))
+                        .findFirst().orElse(null);
+                ScoredItem bestDress = scored.stream()
+                        .filter(s -> isOnePieceEntity(s.item))
+                        .findFirst().orElse(null);
+                preferDress = bestDress != null && (bestTop == null || bestDress.score >= bestTop.score);
+            }
+
             for (String cat : SLOT_ORDER) {
                 if (chosen.containsKey(cat)) continue;
+                if ("dress".equals(cat) && !preferDress) continue;
+                if (("top".equals(cat) || "bottom".equals(cat)) && preferDress) continue;
+                if ("accessory".equals(cat) && !"accessory".equals(anchorSlot)) {
+                    // Only attach optional accessory if compatible (skip hosiery when bottom is long trousers)
+                    WardrobeItem pickedBottom = chosen.get("bottom");
+                    scored.stream().map(s -> s.item)
+                            .filter(i -> !Objects.equals(i.getId(), anchor.getId()))
+                            .filter(i -> "accessory".equalsIgnoreCase(i.getCategory()) && !isOnePieceEntity(i))
+                            .filter(i -> !isLongTrousers(pickedBottom) || !isHosieryEntity(i))
+                            .findFirst()
+                            .ifPresent(it -> chosen.put(cat, it));
+                    continue;
+                }
                 scored.stream().map(s -> s.item)
-                        .filter(i -> cat.equals(i.getCategory()) && !Objects.equals(i.getId(), anchor.getId()))
+                        .filter(i -> {
+                            if (Objects.equals(i.getId(), anchor.getId())) return false;
+                            String effCat = isOnePieceEntity(i) ? "dress" : i.getCategory();
+                            return cat.equals(effCat);
+                        })
                         .findFirst().ifPresent(it -> chosen.put(cat, it));
             }
             return new StylistOutput(
@@ -572,33 +838,49 @@ public class OutfitRecommendationService {
 
         String q = Objects.toString(req.getUserQuery(), "").trim();
         if ("nl_query".equals(triggerType) && !q.isBlank()) {
-            if (q.contains("面试") || q.contains("职场") || q.contains("精神")) {
-                pickBest(scored, wardrobe, chosen, "outerwear", "西装", "风衣");
-                pickBest(scored, wardrobe, chosen, "top", "白T", "衬衫");
-                pickBest(scored, wardrobe, chosen, "bottom", "西装", "阔腿");
-                pickBest(scored, wardrobe, chosen, "shoes", "乐福", "皮鞋");
-                pickBest(scored, wardrobe, chosen, "accessory", "托特", "通勤");
-                List<OutfitDto.MissingSlotVo> missing = chosen.containsKey("outerwear") ? Collections.emptyList() : List.of(trenchMissing());
-                return new StylistOutput("利落松弛 · 互联网面试", orderedIds(chosen), missing,
-                        "针对互联网面试「精神但不死板」的诉求，选用柔和廓形外套内搭重磅白T与垂感阔腿裤，干练克制又具审美松弛感。", 97.0);
+            List<StyleCluster> activeClusters = detectActiveClusters(scene, q);
+            if (!activeClusters.isEmpty()) {
+                StyleCluster primary = activeClusters.get(0);
+                if ("interview_office".equals(primary.key())) {
+                    pickBest(scored, wardrobe, chosen, "outerwear", "西装", "风衣");
+                    pickBest(scored, wardrobe, chosen, "top", "衬衫", "白T");
+                    if (!chosen.containsKey("dress") && !isOnePieceEntity(chosen.get("top"))) {
+                        pickBest(scored, wardrobe, chosen, "bottom", "西装", "阔腿");
+                    }
+                    pickBest(scored, wardrobe, chosen, "shoes", "乐福", "皮鞋");
+                    pickBest(scored, wardrobe, chosen, "bag", "托特", "通勤");
+                    List<OutfitDto.MissingSlotVo> missing = chosen.containsKey("outerwear") ? Collections.emptyList() : List.of(trenchMissing());
+                    return new StylistOutput("利落松弛 · 互联网面试", orderedIds(chosen), missing,
+                            "针对「" + q + "」诉求，选用柔和廓形外套内搭极简上装与垂感阔腿裤，干练克制又具审美松弛感。", 97.0);
+                }
+                if ("casual_retro".equals(primary.key())) {
+                    pickBest(scored, wardrobe, chosen, "top", "白T", "条纹");
+                    if (!chosen.containsKey("dress") && !isOnePieceEntity(chosen.get("top"))) {
+                        pickBest(scored, wardrobe, chosen, "bottom", "牛仔", "阔腿");
+                    }
+                    pickBest(scored, wardrobe, chosen, "shoes", "德训", "运动");
+                    pickBest(scored, wardrobe, chosen, "bag", "马鞍", "托特");
+                    return new StylistOutput("周末咖啡馆 · 复古松弛", orderedIds(chosen), List.of(suedeMissing()),
+                            "围绕「" + q + "」松弛复古氛围，用直筒牛仔与德训鞋打底，整体干净克制。", 94.5);
+                }
+                // Dynamic style-cluster selection (deciding dress vs top+bottom, plus independent bag & accessory)
+                pickDynamicOutfitSlots(scored, chosen, weather.getTemp(), q, activeClusters);
+                WardrobeItem chosenOuter = chosen.get("outerwear");
+                if (chosenOuter != null && countClusterNegativeHits(chosenOuter, activeClusters) > 0) {
+                    chosen.remove("outerwear");
+                }
+                WardrobeItem mainDress = chosen.get("dress");
+                String reasoning = mainDress != null
+                        ? "已精准捕捉「" + q + "」风格诉求，挑选连衣裙/连体主角「" + mainDress.getName()
+                          + "」单穿定调（自动过滤半身裤装与违和暗黑单品），配以呼应鞋包与配饰完成整套造型。"
+                        : "已精准捕捉「" + q + "」风格诉求，按氛围美学优先挑选高契合单品并抑制风格冲突单品。";
+                return new StylistOutput(primary.displayTitle(), orderedIds(chosen), Collections.emptyList(), reasoning, 96.0);
             }
-            if (q.contains("约会") || q.contains("温柔")) {
-                pickBest(scored, wardrobe, chosen, "outerwear", "开衫", "米白");
-                pickBest(scored, wardrobe, chosen, "top", "白T", "纯白");
-                pickBest(scored, wardrobe, chosen, "bottom", "裙", "卡其");
-                pickBest(scored, wardrobe, chosen, "shoes", "乐福", "焦糖");
-                pickBest(scored, wardrobe, chosen, "accessory", "马鞍", "腋下");
-                List<OutfitDto.MissingSlotVo> missing = chosen.containsKey("outerwear") ? Collections.emptyList() : List.of(trenchMissing());
-                return new StylistOutput("落日燕麦 · 约会温柔风", orderedIds(chosen), missing,
-                        "以低饱和燕麦与卡其色系勾勒温柔轮廓，用焦糖色配件首尾呼应，自带柔和约会氛围滤镜。", 95.0);
-            }
-            // Cafe / casual retro
-            pickBest(scored, wardrobe, chosen, "top", "白T", "条纹");
-            pickBest(scored, wardrobe, chosen, "bottom", "牛仔", "阔腿");
-            pickBest(scored, wardrobe, chosen, "shoes", "德训", "运动");
-            pickBest(scored, wardrobe, chosen, "accessory", "马鞍", "托特");
-            return new StylistOutput("周末咖啡馆 · 复古松弛", orderedIds(chosen), List.of(suedeMissing()),
-                    "结合周末松弛复古氛围，用已有直筒牛仔与复古德训鞋打底，建议补充美拉德翻毛麂皮夹克点亮整体层次。", 94.5);
+
+            // Generic keyword fallback for queries outside predefined clusters
+            pickDynamicOutfitSlots(scored, chosen, weather.getTemp(), q, Collections.emptyList());
+            return new StylistOutput("专属定制 · " + (q.length() > 8 ? q.substring(0, 8) : q), orderedIds(chosen),
+                    Collections.emptyList(), "已围绕你的场景诉求「" + q + "」在衣橱内检索最契合的单品完成搭配。", 94.5);
         }
 
         // Default daily_weather driven recommendation
@@ -609,7 +891,7 @@ public class OutfitRecommendationService {
             pickBest(scored, wardrobe, chosen, "top", "白T", "纯白", excludeSet);
             pickBest(scored, wardrobe, chosen, "bottom", "裙", "牛仔", excludeSet);
             pickBest(scored, wardrobe, chosen, "shoes", "德训", "乐福", excludeSet);
-            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包", excludeSet);
+            pickBest(scored, wardrobe, chosen, "bag", "托特", "包", excludeSet);
             List<OutfitDto.MissingSlotVo> missing = chosen.isEmpty() ? List.of(stripedTeeMissing()) : Collections.emptyList();
             return new StylistOutput("清透燕麦 · 晴暖出街", orderedIds(chosen), missing,
                     temp + "℃ 晴暖天气已自动过滤厚外套，优先挑选轻盈透气单品，延续低饱和燕麦画廊美学。", 94.0);
@@ -618,7 +900,7 @@ public class OutfitRecommendationService {
             pickBest(scored, wardrobe, chosen, "top", "背心", "针织", excludeSet);
             pickBest(scored, wardrobe, chosen, "bottom", "阔腿", "牛仔", excludeSet);
             pickBest(scored, wardrobe, chosen, "shoes", "乐福", "德训", excludeSet);
-            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包", excludeSet);
+            pickBest(scored, wardrobe, chosen, "bag", "托特", "包", excludeSet);
             List<OutfitDto.MissingSlotVo> missing = chosen.containsKey("outerwear")
                     ? Collections.emptyList() : List.of(suedeMissing());
             return new StylistOutput("美拉德防风 · 降温保暖", orderedIds(chosen), missing,
@@ -630,7 +912,7 @@ public class OutfitRecommendationService {
             pickBest(scored, wardrobe, chosen, "top", "白T", "纯白", excludeSet);
             pickBest(scored, wardrobe, chosen, "bottom", "牛仔", "阔腿", excludeSet);
             pickBest(scored, wardrobe, chosen, "shoes", "乐福", "德训", excludeSet);
-            pickBest(scored, wardrobe, chosen, "accessory", "托特", "包", excludeSet);
+            pickBest(scored, wardrobe, chosen, "bag", "托特", "包", excludeSet);
             List<OutfitDto.MissingSlotVo> missing = chosen.containsKey("outerwear")
                     ? Collections.emptyList() : List.of(trenchMissing());
             return new StylistOutput("温柔通勤 · 轻松出门", orderedIds(chosen), missing,
@@ -1022,10 +1304,10 @@ public class OutfitRecommendationService {
         if (usedItems.stream().anyMatch(i -> seasonPalette.contains(i.getColor()))) colorScore += 3;
 
         int proportionScore = 82;
-        if (cats.contains("top") && cats.contains("bottom")) proportionScore += 5;
+        if (cats.contains("dress") || (cats.contains("top") && cats.contains("bottom"))) proportionScore += 5;
         if (cats.contains("outerwear")) proportionScore += 3;
         if (cats.contains("shoes")) proportionScore += 2;
-        if (cats.contains("accessory")) proportionScore += 2;
+        if (cats.contains("bag") || cats.contains("accessory")) proportionScore += 2;
         if (usedItems.size() <= 2) proportionScore -= 6;
 
         int sceneScore = 85;
@@ -1046,15 +1328,15 @@ public class OutfitRecommendationService {
         } else {
             highlights.add("画布整体构图简洁干净，保留了 Alta 极简画廊留白感");
         }
-        if (cats.contains("outerwear") && cats.contains("top")) {
+        if (cats.contains("outerwear") && (cats.contains("top") || cats.contains("dress"))) {
             highlights.add("内外叠穿层次清晰，早晚温差切换实用度高");
         } else {
             highlights.add("符合「" + Objects.toString(pref.getBodyShape(), "H型直筒") + "」日常轻盈穿搭框架");
         }
 
         List<String> improvements = new ArrayList<>();
-        if (!cats.contains("accessory")) {
-            improvements.add("目前缺少包袋/配饰收尾，加入一只焦糖或燕麦色小包能让整套完成度显著拉升");
+        if (!cats.contains("bag")) {
+            improvements.add("目前缺少包袋收尾，加入一只焦糖或燕麦色小包能让整套完成度显著拉升");
         } else if (!cats.contains("outerwear")) {
             improvements.add("可尝试外搭一件微廓形外套或针织开衫披肩，增加纵向立体感与防风余量");
         } else {
@@ -1066,7 +1348,7 @@ public class OutfitRecommendationService {
 
         // Suggest 1 real item from the user's own wardrobe that isn't currently used
         Set<Long> usedIdSet = usedItems.stream().map(WardrobeItem::getId).collect(Collectors.toSet());
-        String preferMissingCat = !cats.contains("accessory") ? "accessory"
+        String preferMissingCat = !cats.contains("bag") ? "bag"
                 : (!cats.contains("outerwear") ? "outerwear"
                 : (!cats.contains("shoes") ? "shoes" : "bottom"));
         WardrobeItem swapItem = wardrobe.stream()
@@ -1194,6 +1476,76 @@ public class OutfitRecommendationService {
         List<OutfitDto.CollageNode> nodes = (req != null && req.getNodes() != null)
                 ? req.getNodes() : Collections.emptyList();
         plan.setCollageLayout(jsonUtils.toJson(nodes));
+
+        List<WardrobeItem> wardrobe = wardrobeItemMapper.selectList(
+                new LambdaQueryWrapper<WardrobeItem>().eq(WardrobeItem::getUserId, userId));
+        Set<Long> ownedIds = wardrobe.stream().map(WardrobeItem::getId).collect(Collectors.toSet());
+        List<Long> syncedOwnedIds = nodes.stream()
+                .filter(n -> n.getLabelText() == null || n.getLabelText().isBlank())
+                .map(OutfitDto.CollageNode::getItemId)
+                .filter(id -> id != null && id > 0 && ownedIds.contains(id))
+                .distinct()
+                .collect(Collectors.toList());
+        if (!syncedOwnedIds.isEmpty()) {
+            plan.setItemIds(jsonUtils.toJson(syncedOwnedIds));
+        }
+
+        outfitPlanMapper.updateById(plan);
+
+        List<OutfitDto.ProductVo> products = commerceMatchService.findByIds(
+                jsonUtils.toLongList(plan.getRecommendedProductIds()));
+        return buildPlanVo(plan, wardrobe, null, products, false);
+    }
+
+    public OutfitDto.PlanVo removePlanItem(Long userId, Long planId, Long itemId) {
+        OutfitPlan plan = requireOwnedPlan(userId, planId);
+        List<Long> currentIds = new ArrayList<>(jsonUtils.toLongList(plan.getItemIds()));
+        if (!currentIds.contains(itemId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "该单品不在当前穿搭方案中");
+        }
+        if (currentIds.size() <= 1) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "搭配至少需保留 1 件衣橱单品");
+        }
+        currentIds.removeIf(id -> Objects.equals(id, itemId));
+        plan.setItemIds(jsonUtils.toJson(currentIds));
+
+        List<OutfitDto.CollageNode> layout = jsonUtils.fromJson(
+                plan.getCollageLayout(), new TypeReference<List<OutfitDto.CollageNode>>() {}, Collections.emptyList());
+        if (!layout.isEmpty()) {
+            List<OutfitDto.CollageNode> filteredLayout = layout.stream()
+                    .filter(n -> !Objects.equals(n.getItemId(), itemId))
+                    .collect(Collectors.toList());
+            plan.setCollageLayout(jsonUtils.toJson(filteredLayout));
+        }
+        outfitPlanMapper.updateById(plan);
+
+        List<WardrobeItem> wardrobe = wardrobeItemMapper.selectList(
+                new LambdaQueryWrapper<WardrobeItem>().eq(WardrobeItem::getUserId, userId));
+        List<OutfitDto.ProductVo> products = commerceMatchService.findByIds(
+                jsonUtils.toLongList(plan.getRecommendedProductIds()));
+        return buildPlanVo(plan, wardrobe, null, products, false);
+    }
+
+    public OutfitDto.PlanVo addPlanItem(Long userId, Long planId, Long itemId) {
+        OutfitPlan plan = requireOwnedPlan(userId, planId);
+        WardrobeItem item = wardrobeItemMapper.selectById(itemId);
+        if (item == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到该衣物单品");
+        }
+        if (!Objects.equals(item.getUserId(), userId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+
+        List<Long> currentIds = new ArrayList<>(jsonUtils.toLongList(plan.getItemIds()));
+        if (!currentIds.contains(itemId)) {
+            currentIds.add(itemId);
+        }
+        String cat = Objects.toString(item.getCategory(), "");
+        List<OutfitDto.MissingSlotVo> missing = parseMissing(plan.getMissingItems()).stream()
+                .filter(m -> !cat.equalsIgnoreCase(m.getCategory()))
+                .collect(Collectors.toList());
+        plan.setItemIds(jsonUtils.toJson(currentIds));
+        plan.setMissingItems(jsonUtils.toJson(missing));
         outfitPlanMapper.updateById(plan);
 
         List<WardrobeItem> wardrobe = wardrobeItemMapper.selectList(
@@ -1223,7 +1575,7 @@ public class OutfitRecommendationService {
         Map<String, StorageService.StoredImage> garmentImagesBySlot = new LinkedHashMap<>();
         List<OutfitDto.PlanSlotVo> allSlots = planVo.getSlots() != null ? planVo.getSlots() : Collections.emptyList();
         for (OutfitDto.PlanSlotVo slot : allSlots) {
-            if (garmentImagesBySlot.size() >= 5 || slot.getItem() == null) continue;
+            if (garmentImagesBySlot.size() >= 6 || slot.getItem() == null) continue;
             StorageService.StoredImage gImg = storageService.readGarmentImageForAi(userId, slot.getItem().getProcessedImageUrl());
             if (gImg == null && slot.getItem().getId() != null) {
                 WardrobeItem entity = wardrobeById.get(slot.getItem().getId());
@@ -1404,6 +1756,7 @@ public class OutfitRecommendationService {
                 OutfitDto.PlanSlotVo topOnlySlot = findSlotByKey(allSlots, "top");
                 OutfitDto.PlanSlotVo bottomOnlySlot = findSlotByKey(allSlots, "bottom");
                 OutfitDto.PlanSlotVo shoesSlot = findSlotByKey(allSlots, "shoes");
+                OutfitDto.PlanSlotVo bagSlot = findSlotByKey(allSlots, "bag");
                 OutfitDto.PlanSlotVo accessorySlot = findSlotByKey(allSlots, "accessory");
 
                 String upperPref = req != null && req.getUpperGarmentPreference() != null
@@ -1426,6 +1779,7 @@ public class OutfitRecommendationService {
                 }
                 if (shoesSlot != null) orderedCandidates.add(shoesSlot);
                 if (accessorySlot != null) orderedCandidates.add(accessorySlot);
+                if (bagSlot != null) orderedCandidates.add(bagSlot);
 
                 int maxGarments = DashScopeVtonClient.maxGarmentsForModel(creds.vtonModel());
                 Map<String, OutfitDto.VisualPieceFeatureVo> featureBySlot = new LinkedHashMap<>();
@@ -1850,31 +2204,40 @@ public class OutfitRecommendationService {
                                                               WardrobeItem anchor,
                                                               int temp,
                                                               int maxCount) {
+        return selectDiverseContactSheetItems(scored, anchor, temp, null, maxCount);
+    }
+
+    private List<WardrobeItem> selectDiverseContactSheetItems(List<ScoredItem> scored,
+                                                              WardrobeItem anchor,
+                                                              int temp,
+                                                              String userQuery,
+                                                              int maxCount) {
         List<WardrobeItem> selected = new ArrayList<>();
         Set<Long> seenIds = new LinkedHashSet<>();
         if (anchor != null && anchor.getId() != null && seenIds.add(anchor.getId())) {
             selected.add(anchor);
         }
+        boolean wantsAcc = userQuery != null && userQuery.matches(".*(丝袜|黑丝|渔网|过膝袜|堆堆袜|配饰|项链|耳环|耳饰|墨镜|帽|围巾).*");
         Map<String, Integer> quotas = new LinkedHashMap<>();
         quotas.put("top", 2);
+        quotas.put("dress", 2);
         quotas.put("bottom", 2);
         quotas.put("shoes", 2);
-        quotas.put("outerwear", temp < 25 ? 2 : 1);
-        quotas.put("accessory", 1);
+        quotas.put("outerwear", 1);
+        quotas.put("bag", 2);
+        quotas.put("accessory", wantsAcc ? 2 : 1);
 
         for (Map.Entry<String, Integer> entry : quotas.entrySet()) {
             String cat = entry.getKey();
             int need = entry.getValue();
             int have = (int) selected.stream()
-                    .filter(w -> cat.equalsIgnoreCase(w.getCategory()) || ("top".equals(cat) && "dress".equalsIgnoreCase(w.getCategory())))
+                    .filter(w -> cat.equalsIgnoreCase(w.getCategory()))
                     .count();
             for (ScoredItem si : scored) {
                 if (selected.size() >= maxCount || have >= need) break;
                 WardrobeItem w = si.item;
                 if (w.getId() == null || seenIds.contains(w.getId())) continue;
-                boolean catMatch = cat.equalsIgnoreCase(w.getCategory())
-                        || ("top".equals(cat) && "dress".equalsIgnoreCase(w.getCategory()));
-                if (catMatch) {
+                if (cat.equalsIgnoreCase(w.getCategory())) {
                     selected.add(w);
                     seenIds.add(w.getId());
                     have++;
@@ -1911,11 +2274,9 @@ public class OutfitRecommendationService {
 
     private boolean isOnePieceGarment(OutfitDto.PlanSlotVo slot) {
         if (slot == null || slot.getItem() == null) return false;
-        String cat = Objects.toString(slot.getItem().getCategory(), "");
-        if ("dress".equalsIgnoreCase(cat)) return true;
-        String name = Objects.toString(slot.getItem().getName(), "");
-        return name.contains("连衣裙") || name.contains("连体裤") || name.contains("连体衣")
-                || name.contains("背带裤") || name.contains("背带裙") || name.contains("长裙套装");
+        WardrobeDto.ItemVo vo = slot.getItem();
+        return isOnePieceMeta(vo.getCategory(), vo.getSubCategory(), vo.getName(),
+                vo.getStyleTags() != null ? String.join(" ", vo.getStyleTags()) : "");
     }
 
     private String resolveSlotAssetUrl(OutfitDto.PlanSlotVo slot, Map<Long, WardrobeItem> wardrobeById) {
@@ -2163,6 +2524,90 @@ public class OutfitRecommendationService {
         return weather.getCondition() + " " + weather.getTemp() + "℃ · " + weather.getTip();
     }
 
+    private long countClusterNegativeHits(WardrobeItem item, List<StyleCluster> activeClusters) {
+        if (item == null || activeClusters == null || activeClusters.isEmpty()) return 0;
+        String hay = buildItemSearchHaystack(item);
+        return activeClusters.stream()
+                .flatMap(c -> c.negatives().stream())
+                .distinct()
+                .filter(hay::contains)
+                .count();
+    }
+
+    private void pickDynamicOutfitSlots(List<ScoredItem> scored, Map<String, WardrobeItem> chosen,
+                                        int temp, String userQuery, List<StyleCluster> activeClusters) {
+        ScoredItem bestDress = pickBestScoredCandidate(scored, "dress", activeClusters, Collections.emptySet());
+        ScoredItem bestTop = pickBestScoredCandidate(scored, "top", activeClusters, Collections.emptySet());
+        boolean preferDress = bestDress != null && (bestTop == null || bestDress.score >= bestTop.score);
+
+        if (preferDress) {
+            chosen.put("dress", bestDress.item);
+        } else {
+            if (bestTop != null) {
+                chosen.put("top", bestTop.item);
+            }
+            pickHighestScoredForSlot(scored, chosen, "bottom", activeClusters, Collections.emptySet());
+        }
+
+        if (temp < 25) {
+            pickHighestScoredForSlot(scored, chosen, "outerwear", activeClusters, Collections.emptySet());
+        }
+        pickHighestScoredForSlot(scored, chosen, "shoes", activeClusters, Collections.emptySet());
+        pickHighestScoredForSlot(scored, chosen, "bag", activeClusters, Collections.emptySet());
+
+        // Optional accessory: include if aligned with active style/query, skipping hosiery with long trousers unless asked
+        List<String> qTokens = extractQueryTokens(userQuery);
+        String qLower = Objects.toString(userQuery, "").toLowerCase(Locale.ROOT);
+        boolean wantsHosiery = qLower.contains("丝袜") || qLower.contains("黑丝") || qLower.contains("渔网")
+                || qLower.contains("过膝袜") || qLower.contains("堆堆袜") || qLower.contains("袜");
+        WardrobeItem pickedBottom = chosen.get("bottom");
+        scored.stream()
+                .map(s -> s.item)
+                .filter(i -> "accessory".equalsIgnoreCase(i.getCategory()) && !isOnePieceEntity(i))
+                .filter(i -> countClusterNegativeHits(i, activeClusters) == 0)
+                .filter(i -> wantsHosiery || !isLongTrousers(pickedBottom) || !isHosieryEntity(i))
+                .filter(i -> {
+                    if (activeClusters != null && !activeClusters.isEmpty()) {
+                        String hay = buildItemSearchHaystack(i);
+                        boolean pos = activeClusters.stream().flatMap(c -> c.positives().stream()).anyMatch(hay::contains);
+                        boolean tok = qTokens.stream().anyMatch(hay::contains);
+                        return pos || tok;
+                    }
+                    return qTokens.stream().anyMatch(buildItemSearchHaystack(i)::contains);
+                })
+                .findFirst()
+                .ifPresent(it -> chosen.put("accessory", it));
+    }
+
+    private ScoredItem pickBestScoredCandidate(List<ScoredItem> scored, String cat,
+                                               List<StyleCluster> activeClusters, Set<Long> excludeSet) {
+        return scored.stream()
+                .filter(s -> {
+                    WardrobeItem i = s.item;
+                    if (excludeSet != null && excludeSet.contains(i.getId())) return false;
+                    String effCat = isOnePieceEntity(i) ? "dress" : i.getCategory();
+                    return cat.equalsIgnoreCase(effCat);
+                })
+                .filter(s -> countClusterNegativeHits(s.item, activeClusters) == 0)
+                .findFirst()
+                .orElseGet(() -> scored.stream()
+                        .filter(s -> (excludeSet == null || !excludeSet.contains(s.item.getId()))
+                                && cat.equalsIgnoreCase(isOnePieceEntity(s.item) ? "dress" : s.item.getCategory()))
+                        .findFirst()
+                        .orElse(null));
+    }
+
+    private void pickHighestScoredForSlot(List<ScoredItem> scored, Map<String, WardrobeItem> chosen,
+                                          String cat, List<StyleCluster> activeClusters, Set<Long> excludeSet) {
+        if (("top".equals(cat) || "bottom".equals(cat)) && (chosen.containsKey("dress") || isOnePieceEntity(chosen.get("top")))) {
+            return;
+        }
+        ScoredItem best = pickBestScoredCandidate(scored, cat, activeClusters, excludeSet);
+        if (best != null) {
+            chosen.put(cat, best.item);
+        }
+    }
+
     private void pickBest(List<ScoredItem> scored, List<WardrobeItem> all, Map<String, WardrobeItem> chosen,
                           String cat, String prefer1, String prefer2) {
         pickBest(scored, all, chosen, cat, prefer1, prefer2, Collections.emptySet());
@@ -2170,6 +2615,9 @@ public class OutfitRecommendationService {
 
     private void pickBest(List<ScoredItem> scored, List<WardrobeItem> all, Map<String, WardrobeItem> chosen,
                           String cat, String prefer1, String prefer2, Set<Long> excludeSet) {
+        if (("top".equals(cat) || "bottom".equals(cat)) && (chosen.containsKey("dress") || isOnePieceEntity(chosen.get("top")))) {
+            return;
+        }
         if (excludeSet != null && !excludeSet.isEmpty()) {
             Optional<WardrobeItem> freshScored = scored.stream()
                     .map(s -> s.item)

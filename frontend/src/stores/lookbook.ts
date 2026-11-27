@@ -346,6 +346,25 @@ export const useLookbookStore = defineStore('lookbook', () => {
     }
   }
 
+  async function addPlanItem(itemId: number) {
+    if (!currentPlan.value) return null;
+    const updated = await outfitApi.addPlanItem(currentPlan.value.id, itemId);
+    rememberPlan(updated);
+    favorites.value = favorites.value.map((f) => (f.id === updated.id ? updated : f));
+    return updated;
+  }
+
+  async function removePlanItem(itemId: number) {
+    if (!currentPlan.value) return null;
+    const updated = await outfitApi.removePlanItem(currentPlan.value.id, itemId);
+    if (anchorItemId.value === itemId) {
+      anchorItemId.value = null;
+    }
+    rememberPlan(updated);
+    favorites.value = favorites.value.map((f) => (f.id === updated.id ? updated : f));
+    return updated;
+  }
+
   async function saveCollageLayout(nodes: CollageNode[]) {
     if (!currentPlan.value) return null;
     const updated = await outfitApi.saveCollageLayout(currentPlan.value.id, nodes);
@@ -542,6 +561,8 @@ export const useLookbookStore = defineStore('lookbook', () => {
     shuffleOutfit,
     toggleSlotLock,
     swapSlot,
+    addPlanItem,
+    removePlanItem,
     saveCollageLayout,
     submitTryOnJob,
     applyTryOnJobAsCover,

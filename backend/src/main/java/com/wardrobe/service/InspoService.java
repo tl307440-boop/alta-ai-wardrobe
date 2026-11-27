@@ -45,7 +45,7 @@ public class InspoService {
             InspoDto.BannerVo.builder()
                     .id("bn-2")
                     .eyebrow("设计师配饰企划 · GOLD HOOPS")
-                    .title("金属耳饰与包配点睛")
+                    .title("金属耳饰与包袋点睛")
                     .subtitle("雕塑感金饰 / 荔枝纹托特 / 麂皮新月包 · 高质感穿搭平替严选")
                     .ctaLabel("去逛同款")
                     .brandFilter("配饰")
@@ -474,7 +474,7 @@ public class InspoService {
                         piece("w1-p2", "Brandy Melville", "纯白翻领长袖叠穿打底衬衫", "top", "衬衫", "纯白", "#FFFFFF", "199", "/alta/pieces/white-shirt.webp", "tshirt", topSimilars()),
                         piece("w1-p3", "Aritzia", "极简高腰黑色A字半身短裙", "bottom", "下装", "炭黑", "#1E1E1E", "329", "/alta/pieces/black-mini-skirt.webp", "pleated_skirt", bottomSimilars()),
                         piece("w1-p4", "Sam Edelman", "黑色真皮直筒不过膝骑士长靴", "shoes", "鞋履", "炭黑", "#1E1E1E", "699", "/alta/pieces/black-knee-boots.webp", "loafers", shoeSimilars()),
-                        piece("w1-p5", "Songmont 风格", "深棕荔枝纹头层牛皮水桶包", "accessory", "包袋", "焦糖棕", "#8A5230", "580", "/alta/pieces/brown-bucket-bag.webp", "tote_bag", bagSimilars()),
+                        piece("w1-p5", "Songmont 风格", "深棕荔枝纹头层牛皮水桶包", "bag", "包袋", "焦糖棕", "#8A5230", "580", "/alta/pieces/brown-bucket-bag.webp", "tote_bag", bagSimilars()),
                         piece("w1-p6", "HEFANG", "925纯银极简几何素圈耳环", "accessory", "耳饰", "银色", "#C0C0C0", "269", "/alta/pieces/silver-hoop-earrings.webp", "crossbody_bag", earringSimilars())
                 ))
                 .sampleComments(List.of("白衬衫领口露出一截配深棕毛衣太显气质了！", "长靴和短裙比例绝佳，直接点进左边买了同款毛衣"))
@@ -490,7 +490,7 @@ public class InspoService {
                         piece("w2-p1", "ICICLE / Nanushka", "奶油白微廓形单排扣西装外套", "outerwear", "外套", "米白", "#F3EDE2", "899", "/alta/pieces/cream-blazer.webp", "blazer", outerwearSimilars()),
                         piece("w2-p2", "之禾精选", "香槟米白缎面垂感纽扣衬衫", "top", "上衣", "燕麦", "#DFD3C3", "399", "/alta/pieces/beige-satin-shirt.webp", "striped_shirt", topSimilars()),
                         piece("w2-p3", "TWP 同款", "奶油白高腰垂感直筒阔腿裤", "bottom", "下装", "米白", "#F3EDE2", "359", "/alta/pieces/cream-wide-pants.webp", "trousers", bottomSimilars()),
-                        piece("w2-p4", "Demellier 风格", "奶油荔枝纹大容量通勤托特包", "accessory", "包袋", "米白", "#F3EDE2", "680", "/alta/pieces/cream-tote.webp", "tote_bag", bagSimilars()),
+                        piece("w2-p4", "Demellier 风格", "奶油荔枝纹大容量通勤托特包", "bag", "包袋", "米白", "#F3EDE2", "680", "/alta/pieces/cream-tote.webp", "tote_bag", bagSimilars()),
                         piece("w2-p5", "CELINE 风格", "极简黑框椭圆复古太阳镜", "accessory", "墨镜", "炭黑", "#1E1E1E", "320", "/alta/pieces/celine-sunglasses.webp", "crossbody_bag", watchSimilars())
                 ))
                 .sampleComments(List.of("全套奶油白顺色太高级了，完全就是画廊主编感", "托特包配廓形西装上班气场满分"))
@@ -521,7 +521,7 @@ public class InspoService {
                         piece("w4-p1", "JNBY 江南布衣", "奶油米白立体绞花宽松毛衣", "top", "上衣", "米白", "#F3EDE2", "429", "/alta/pieces/cream-cable-sweater.webp", "cardigan", topSimilars()),
                         piece("w4-p2", "Edition 风格", "橄榄绿重磅醋酸缎面及踝半身裙", "bottom", "下装", "卡其", "#5C634E", "329", "/alta/pieces/olive-satin-skirt.webp", "pleated_skirt", bottomSimilars()),
                         piece("w4-p3", "百丽 BELLE", "黑色软皮粗跟及膝骑士长靴", "shoes", "鞋履", "炭黑", "#1E1E1E", "559", "/alta/pieces/black-knee-boots.webp", "loafers", shoeSimilars()),
-                        piece("w4-p4", "Songmont", "黑色荔枝纹软皮慵懒单肩流浪包", "accessory", "包袋", "炭黑", "#262628", "680", "/alta/pieces/black-hobo-bag.webp", "tote_bag", bagSimilars()),
+                        piece("w4-p4", "Songmont", "黑色荔枝纹软皮慵懒单肩流浪包", "bag", "包袋", "炭黑", "#262628", "680", "/alta/pieces/black-hobo-bag.webp", "tote_bag", bagSimilars()),
                         piece("w4-p5", "LOLA ROSE", "银白小方盘精钢链条通勤女表", "accessory", "腕表", "银色", "#C0C0C0", "890", "/alta/pieces/silver-watch.webp", "crossbody_bag", watchSimilars())
                 ))
                 .sampleComments(List.of("粗针毛衣配丝滑缎面裙，材质碰撞太美了！"))
@@ -537,7 +537,7 @@ public class InspoService {
                         piece("w5-p1", "URBAN REVIVO", "纯净奶白宽松V领软糯针织衫", "top", "上衣", "纯白", "#FFFFFF", "239", "/alta/pieces/white-vneck-sweater.webp", "cardigan", topSimilars()),
                         piece("w5-p2", "Moussy 风格", "焦糖棕高腰郁金香花苞半身短裙", "bottom", "下装", "焦糖棕", "#8A5230", "219", "/alta/pieces/brown-tulip-skirt.webp", "pleated_skirt", bottomSimilars()),
                         piece("w5-p3", "UGG 同款", "栗棕色翻毛皮厚底保暖踝靴", "shoes", "鞋履", "焦糖棕", "#8A5230", "399", "/alta/pieces/brown-suede-boots.webp", "loafers", shoeSimilars()),
-                        piece("w5-p4", "小香风精选", "黑色菱格纹羊皮链条翻盖包", "accessory", "包袋", "炭黑", "#1E1E1E", "520", "/alta/pieces/black-quilted-bag.webp", "crossbody_bag", bagSimilars()),
+                        piece("w5-p4", "小香风精选", "黑色菱格纹羊皮链条翻盖包", "bag", "包袋", "炭黑", "#1E1E1E", "520", "/alta/pieces/black-quilted-bag.webp", "crossbody_bag", bagSimilars()),
                         piece("w5-p5", "HEFANG 何方", "法式几何镀金圆环耳圈", "accessory", "耳饰", "金色", "#D4AF37", "268", "/alta/pieces/gold-hoop-earrings.webp", "crossbody_bag", earringSimilars())
                 ))
                 .sampleComments(List.of("V领显脸小，配棕色短裙和短靴周末约会绝配"))
@@ -553,7 +553,7 @@ public class InspoService {
                         piece("w6-p1", "Theory 风格", "挺括纯白廓形长袖通勤衬衫", "top", "上衣", "纯白", "#FFFFFF", "259", "/alta/pieces/white-shirt.webp", "tshirt", topSimilars()),
                         piece("w6-p2", "Massimo Dutti", "藏青色高腰双褶垂感阔腿西裤", "bottom", "下装", "牛仔蓝", "#2A364B", "399", "/alta/pieces/navy-wide-pants.webp", "trousers", bottomSimilars()),
                         piece("w6-p3", "法式桑蚕丝", "红白蓝航海风撞色真丝领巾", "accessory", "丝巾", "红色", "#9E2A2B", "159", "/alta/pieces/silk-scarf.webp", "crossbody_bag", watchSimilars()),
-                        piece("w6-p4", "Bershka 精选", "复古酒红翻毛麂皮单肩腋下包", "accessory", "包袋", "红色", "#9E2A2B", "279", "/alta/pieces/red-suede-bag.webp", "crossbody_bag", bagSimilars())
+                        piece("w6-p4", "Bershka 精选", "复古酒红翻毛麂皮单肩腋下包", "bag", "包袋", "红色", "#9E2A2B", "279", "/alta/pieces/red-suede-bag.webp", "crossbody_bag", bagSimilars())
                 ))
                 .sampleComments(List.of("红蓝丝巾和酒红腋下包把白衬衫黑蓝西裤一下子点活了！"))
                 .build());
@@ -567,7 +567,7 @@ public class InspoService {
                 .pieces(List.of(
                         piece("w7-p1", "COS 风格", "浅燕麦修身坑条针织连衣短裙", "top", "连衣裙", "燕麦", "#DFD3C3", "359", "/alta/pieces/beige-knit-dress.webp", "cardigan", topSimilars()),
                         piece("w7-p2", "叠穿针织披肩", "摩卡棕软糯羊毛搭肩针织披肩", "outerwear", "披肩", "焦糖棕", "#8A5230", "189", "/alta/pieces/sweater-shawl.webp", "cardigan", outerwearSimilars()),
-                        piece("w7-p3", "Coccinelle 同款", "灰棕麂皮新月弧形单肩腋下包", "accessory", "包袋", "燕麦", "#C7B299", "560", "/alta/pieces/taupe-crescent-bag.webp", "crossbody_bag", bagSimilars()),
+                        piece("w7-p3", "Coccinelle 同款", "灰棕麂皮新月弧形单肩腋下包", "bag", "包袋", "燕麦", "#C7B299", "560", "/alta/pieces/taupe-crescent-bag.webp", "crossbody_bag", bagSimilars()),
                         piece("w7-p4", "绒面长靴", "灰棕翻毛皮显瘦不过膝长筒靴", "shoes", "鞋履", "卡其", "#9E9589", "499", "/alta/pieces/taupe-suede-boots.webp", "loafers", shoeSimilars()),
                         piece("w7-p5", "四叶草轻奢", "18K镀金白贝母四叶草锁骨链", "accessory", "项链", "金色", "#D4AF37", "299", "/alta/pieces/gold-clover-necklace.webp", "crossbody_bag", earringSimilars())
                 ))
@@ -584,7 +584,7 @@ public class InspoService {
                         piece("w8-p1", "ANEWSTA / 之禾风", "燕麦米色系带收腰长款羊毛大衣", "outerwear", "外套", "燕麦", "#DFD3C3", "899", "/alta/pieces/beige-belted-coat.webp", "trench", outerwearSimilars()),
                         piece("w8-p2", "极简羊绒", "浅燕麦半高领修身打底针织衫", "top", "上衣", "燕麦", "#DFD3C3", "259", "/alta/pieces/beige-mock-sweater.webp", "knit_vest", topSimilars()),
                         piece("w8-p3", "学院高腰裙", "燕麦杏色防走光高腰百褶短裙", "bottom", "下装", "卡其", "#C7B299", "199", "/alta/pieces/beige-pleated-skirt.webp", "pleated_skirt", bottomSimilars()),
-                        piece("w8-p4", "Miu Miu 风格", "焦糖棕复古油蜡皮单肩腋下包", "accessory", "包袋", "焦糖棕", "#8A5230", "459", "/alta/pieces/brown-shoulder-bag.webp", "crossbody_bag", bagSimilars()),
+                        piece("w8-p4", "Miu Miu 风格", "焦糖棕复古油蜡皮单肩腋下包", "bag", "包袋", "焦糖棕", "#8A5230", "459", "/alta/pieces/brown-shoulder-bag.webp", "crossbody_bag", bagSimilars()),
                         piece("w8-p5", "Coach 风格", "深棕头层牛皮粗跟高筒骑士靴", "shoes", "鞋履", "焦糖棕", "#8A5230", "599", "/alta/pieces/brown-tall-boots.webp", "loafers", shoeSimilars())
                 ))
                 .sampleComments(List.of("燕麦配焦糖棕真的是秋冬永远的神"))
@@ -600,7 +600,7 @@ public class InspoService {
                         piece("w9-p1", "Polo Ralph Lauren", "奶油白绞花羊毛羊绒圆领毛衣", "top", "毛衣", "米白", "#F3EDE2", "499", "/alta/pieces/cream-polo-knit.webp", "cardigan", topSimilars()),
                         piece("w9-p2", "优衣库", "垂感纯白抗皱长袖通勤衬衫", "top", "衬衫", "纯白", "#FFFFFF", "199", "/alta/pieces/white-blouse.webp", "tshirt", topSimilars()),
                         piece("w9-p3", "Aritzia", "纯黑高腰垂感A字及踝半身长裙", "bottom", "下装", "炭黑", "#1E1E1E", "319", "/alta/pieces/black-maxi-skirt.webp", "pleated_skirt", bottomSimilars()),
-                        piece("w9-p4", "Verafied New York", "哑光黑金扣书本托特通勤大包", "accessory", "包袋", "炭黑", "#1E1E1E", "499", "/alta/pieces/black-tote.webp", "tote_bag", bagSimilars()),
+                        piece("w9-p4", "Verafied New York", "哑光黑金扣书本托特通勤大包", "bag", "包袋", "炭黑", "#1E1E1E", "499", "/alta/pieces/black-tote.webp", "tote_bag", bagSimilars()),
                         piece("w9-p5", "经典通勤表", "银盘精钢链带日历石英女表", "accessory", "腕表", "银色", "#C0C0C0", "799", "/alta/pieces/silver-watch.webp", "crossbody_bag", watchSimilars())
                 ))
                 .sampleComments(List.of("干净克制的书卷气，上班和去美术馆都很合适"))
@@ -631,7 +631,7 @@ public class InspoService {
                         piece("w11-p1", "摩卡羊毛呢", "深棕色直筒过膝双面呢大衣", "outerwear", "外套", "焦糖棕", "#8A5230", "980", "/alta/pieces/brown-wool-coat.webp", "trench", outerwearSimilars()),
                         piece("w11-p2", "通勤白衬衫", "纯白挺括翻领长袖打底衬衫", "top", "上衣", "纯白", "#FFFFFF", "199", "/alta/pieces/white-shirt.webp", "tshirt", topSimilars()),
                         piece("w11-p3", "复古中长裙", "深棕哑光皮质高腰开叉迷笛裙", "bottom", "下装", "焦糖棕", "#8A5230", "289", "/alta/pieces/brown-midi-skirt.webp", "pleated_skirt", bottomSimilars()),
-                        piece("w11-p4", "极简黑托特", "黑色硬挺牛皮通勤大容量托特包", "accessory", "包袋", "炭黑", "#1E1E1E", "459", "/alta/pieces/black-tote.webp", "tote_bag", bagSimilars()),
+                        piece("w11-p4", "极简黑托特", "黑色硬挺牛皮通勤大容量托特包", "bag", "包袋", "炭黑", "#1E1E1E", "459", "/alta/pieces/black-tote.webp", "tote_bag", bagSimilars()),
                         piece("w11-p5", "LOLA ROSE", "复古小金表方形石英女表", "accessory", "腕表", "金色", "#D4AF37", "980", "/alta/pieces/gold-watch.webp", "crossbody_bag", watchSimilars())
                 ))
                 .sampleComments(List.of("国贸通勤标准答案，气场和质感都在线"))
@@ -709,7 +709,7 @@ public class InspoService {
                         piece("m4-p1", "A&F 风格", "浅水洗牛津纺宽松长袖休闲衬衫", "top", "上衣", "牛仔蓝", "#6B8CAE", "239", "/alta/pieces/blue-chambray-shirt.webp", "striped_shirt", topSimilars()),
                         piece("m4-p2", "优衣库 U 男装", "橄榄绿纯棉斜纹直筒休闲长裤", "bottom", "下装", "卡其", "#5C634E", "249", "/alta/pieces/olive-cotton-pants.webp", "trousers", bottomSimilars()),
                         piece("m4-p3", "VEJA 复古", "军绿翻毛皮拼接复古慢跑德训鞋", "shoes", "鞋履", "燕麦", "#5C634E", "389", "/alta/pieces/veja-suede-sneakers.webp", "sneakers", shoeSimilars()),
-                        piece("m4-p4", "极简男包", "纯黑头层牛皮竖款大容量托特包", "accessory", "包袋", "炭黑", "#1E1E1E", "459", "/alta/pieces/mens-black-tote.webp", "tote_bag", bagSimilars())
+                        piece("m4-p4", "极简男包", "纯黑头层牛皮竖款大容量托特包", "bag", "包袋", "炭黑", "#1E1E1E", "459", "/alta/pieces/mens-black-tote.webp", "tote_bag", bagSimilars())
                 ))
                 .sampleComments(List.of("浅蓝衬衫配军绿裤子太舒服耐看了"))
                 .build());

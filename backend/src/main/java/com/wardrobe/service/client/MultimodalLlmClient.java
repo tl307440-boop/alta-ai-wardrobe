@@ -106,8 +106,8 @@ public class MultimodalLlmClient {
                 字段规范：
                 - isClothing: boolean（如果不是服装/鞋靴/包袋配饰，例如风景、宠物、纯文档，必须返回 false）
                 - name: string（中文单品名称，如"米白针织开衫"）
-                - category: string（仅允许 outerwear / top / bottom / shoes / accessory）
-                - subCategory: string（细分款式，如"针织开衫"）
+                - category: string（仅允许 outerwear / top / dress / bottom / shoes / bag / accessory；其中 dress 为连衣裙/连体裤/JSK，bag 为包袋，accessory 为丝袜/堆堆袜/首饰/帽子/围巾/墨镜/腰带等配饰）
+                - subCategory: string（细分款式，如"针织开衫"、"链条包"、"过膝丝袜"）
                 - color: string（优先映射到：米白/纯白/燕麦/卡其/焦糖棕/牛仔蓝/雾霾蓝/炭黑 或常见中文颜色）
                 - colorHex: string（对应 HEX 色值，如 "#F3EDE2"）
                 - season: string（逗号分隔：spring,summer,autumn,winter）
@@ -147,7 +147,7 @@ public class MultimodalLlmClient {
                   ]
                 }
                 规则：
-                - category 仅允许 outerwear / top / bottom / shoes / accessory；season 为逗号分隔的 spring,summer,autumn,winter；thickness 为 1 薄夏 / 2 适中春秋 / 3 厚冬；styleTags 为 2~4 个中文风格标签。
+                - category 仅允许 outerwear / top / dress / bottom / shoes / bag / accessory（dress 为连衣裙/连体裤/JSK，bag 为包袋，accessory 为丝袜/堆堆袜/首饰/帽子/围巾/墨镜/腰带等配饰）；season 为逗号分隔的 spring,summer,autumn,winter；thickness 为 1 薄夏 / 2 适中春秋 / 3 厚冬；styleTags 为 2~4 个中文风格标签。
                 - 只列真实可见的单品，不要臆造；完全被遮挡的不要列；图中只有一件就只返回一件；最多 8 件。
                 - bbox 是该单品在整张图片中的紧致外接框，四个数都是 0~1 的小数：[x, y, w, h]，x、y 为框左上角相对图片宽、高的比例，w、h 为框宽、高占图片宽、高的比例。
                 - 如果图片不是服装（风景、宠物、纯文档等），返回 {"isClothing": false, "items": []}。
@@ -161,7 +161,7 @@ public class MultimodalLlmClient {
     public JsonNode analyzeStreetInspiration(AiConfigService.ResolvedAiCredentials creds, String imageDataUri,
                                              String userQuery, String budgetStr) {
         String systemPrompt = """
-                你是专业时尚穿搭拆解专家。请识别全身街拍/穿搭灵感图中的 3~5 件核心单品（外套、上衣、下装、鞋履、包配），仅返回合法 JSON，禁止输出 Markdown 围栏或多余文字：
+                你是专业时尚穿搭拆解专家。请识别全身街拍/穿搭灵感图中的 3~5 件核心单品（外套、上衣、连衣裙、下装、鞋履、包袋、配饰），仅返回合法 JSON，禁止输出 Markdown 围栏或多余文字：
                 {
                   "overallStyle": "韩系松弛通勤",
                   "detectedItems": [
@@ -178,7 +178,7 @@ public class MultimodalLlmClient {
                     }
                   ]
                 }
-                category 仅允许 outerwear / top / bottom / shoes / accessory；posX 和 posY 为 15~85 的百分比定位坐标。
+                category 仅允许 outerwear / top / dress / bottom / shoes / bag / accessory；posX 和 posY 为 15~85 的百分比定位坐标。
                 """;
         String userText = "用户需求：" + (userQuery != null && !userQuery.isBlank() ? userQuery : "拆解全身搭配单品")
                 + "；单品预算上限：" + budgetStr + "元。请拆解图中单品并返回 JSON。";
@@ -205,10 +205,11 @@ public class MultimodalLlmClient {
                   "matchScore": 96.0
                 }
                 造型原则与硬性要求：
-                1. selectedItemIds 只能从候选衣橱的真实 id 中挑选，每个品类最多选 1 件；严禁连衣裙与独立上下装混选；
-                2. 单一视觉焦点：整套最多 1 件强印花/亮色/强肌理单品作主角，其余单品做克制衬托；
-                3. 廓形重量平衡：下装宽松或垂坠（阔腿/微喇/伞裙）时配利落上衣；厚重外搭里配干净极简内搭；
-                4. 物理叠穿合理并兼顾轮换多样性：优先同色/邻近色或一处可控对比，避免每次只选黑白灰基础款；若衣橱已有合适外套则 missingItems 可为空数组 []。
+                1. selectedItemIds 只能从候选衣橱的真实 id 中挑选，每个品类（outerwear / top / dress / bottom / shoes / bag / accessory）最多选 1 件；其中 dress（连衣裙/连体裤/JSK，one_piece_dress=true）与 top、bottom 严格互斥；bag（包袋）与 accessory（丝袜/堆堆袜/首饰等配饰）为独立槽位，可按场景同时搭配（例如 JK 短裙 + 黑丝/堆堆袜 + 包袋）；
+                2. 严格响应用户的「自然语言诉求」与审美风格，绝对禁止风格冲突（例如「可爱萝莉/甜美」严禁挑选暗黑哥特或辣妹微喇裤，「职场通勤」严禁挑选哥特/亮片礼服或渔网黑丝）；
+                3. 单一视觉焦点：整套最多 1 件强印花/亮色/强肌理单品作主角，其余单品做克制衬托；
+                4. 廓形重量平衡：下装宽松或垂坠（阔腿/微喇/伞裙）时配利落上衣；厚重外搭里配干净极简内搭；
+                5. 物理叠穿合理并兼顾轮换多样性：优先同色/邻近色或一处可控对比，避免每次只选黑白灰基础款；若衣橱已有合适外套则 missingItems 可为空数组 []。
                 """;
 
         return callTextForJson(creds, systemPrompt, stylistUserPrompt);
@@ -241,8 +242,8 @@ public class MultimodalLlmClient {
                   "matchScore": 96.0
                 }
                 造型原则与硬性规则：
-                1. selectedItemIds 只能从候选衣橱的真实数字 id 中挑选，每个品类（outerwear/top/bottom/shoes/accessory）最多选 1 件；
-                2. 严禁同时选择连衣裙与独立上下装，严禁印花打架或面料季节冲突；
+                1. selectedItemIds 只能从候选衣橱的真实数字 id 中挑选，每个品类（outerwear/top/dress/bottom/shoes/bag/accessory）最多选 1 件；bag（包袋）与 accessory（丝袜/堆堆袜/首饰等配饰）为独立槽位，可按风格同时入选；
+                2. 严禁同时选择 ONE-PIECE/连衣裙/JSK(category=dress 或 one_piece_dress=true) 与任何上装（TOP）或独立下装（BOTTOM 裤装或半身裙），严禁风格/明暗/印花冲突（例如「可爱萝莉/甜美」严禁选暗黑哥特或辣妹微喇裤，「通勤/面试」严禁选黑丝/渔网袜/堆堆袜）或面料季节冲突；
                 3. 单一视觉焦点：一套最多 1 件强印花/亮色/特殊材质主角单品，其余用低饱和净色衬托，保留至多 1 处可控冷暖对比；
                 4. 廓形重量平衡与叠穿物理合理性：下装宽松垂坠时上装简洁利落；厚重外搭里配极简内搭且不能穿帮或相互掩盖；
                 5. 轮换多样性：不偷懒只挑黑白灰基础款，主动结合图中特色单品打造质感造型；若衣橱已有合适外套则 missingItems 可为空数组 []。

@@ -1,10 +1,36 @@
 export const CATEGORY_OPTIONS = [
   { key: 'outerwear', label: '外套', barColor: '#111111' },
-  { key: 'top', label: '上衣', barColor: '#4B5563' },
+  { key: 'top', label: '上衣', barColor: '#374151' },
+  { key: 'dress', label: '连衣裙', barColor: '#57534E' },
   { key: 'bottom', label: '下装', barColor: '#78716C' },
   { key: 'shoes', label: '鞋履', barColor: '#A3A3A3' },
-  { key: 'accessory', label: '包配', barColor: '#D4D4D4' },
+  { key: 'bag', label: '包袋', barColor: '#BFBFBF' },
+  { key: 'accessory', label: '配饰', barColor: '#DCDCDC' },
 ];
+
+export function resolveWardrobeSubGroup(item: {
+  category: string;
+  subCategory?: string;
+  name: string;
+}): string | null {
+  const hay = `${item.name || ''} ${item.subCategory || ''}`.toLowerCase();
+  if (item.category === 'accessory') {
+    if (/丝袜|过膝袜|渔网|吊带袜|堆堆袜|袜/.test(hay)) return '丝袜与袜饰';
+    if (/项链|耳环|耳钉|耳饰|手镯|手链|戒指|胸针|珠宝/.test(hay)) return '首饰';
+    if (/帽|围巾|丝巾|披肩|墨镜|太阳镜|眼镜|腰带|皮带|腕表|手表/.test(hay)) return '帽围与眼镜';
+    return '其他配饰';
+  }
+  if (item.category === 'bag') {
+    if (/托特|大容量|通勤大包/.test(hay)) return '托特大包';
+    if (/链条|腋下|马鞍|单肩|新月|流浪/.test(hay)) return '链条与腋下包';
+    if (/手提|斜挎|水桶|玩偶|双肩|包袋|背包/.test(hay)) return '手提与斜挎包';
+    return '其他包袋';
+  }
+  if (item.category === 'bottom') {
+    return /裙/.test(hay) ? '半身裙' : '裤装';
+  }
+  return null;
+}
 
 export const SEASON_OPTIONS = ['春', '夏', '秋', '冬'];
 

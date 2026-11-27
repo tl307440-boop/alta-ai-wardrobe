@@ -153,6 +153,10 @@ export const outfitApi = {
     unwrap<OutfitPlanVo>(http.post(`/outfit/plans/${planId}/swap-slot`, payload)),
   saveCollageLayout: (planId: number, nodes: CollageNode[]) =>
     unwrap<OutfitPlanVo>(http.put(`/outfit/plans/${planId}/collage-layout`, { nodes })),
+  addPlanItem: (planId: number, itemId: number) =>
+    unwrap<OutfitPlanVo>(http.post(`/outfit/plans/${planId}/items`, { itemId })),
+  removePlanItem: (planId: number, itemId: number) =>
+    unwrap<OutfitPlanVo>(http.delete(`/outfit/plans/${planId}/items/${itemId}`)),
   generateTryOn: (
     planId: number,
     payload?: {

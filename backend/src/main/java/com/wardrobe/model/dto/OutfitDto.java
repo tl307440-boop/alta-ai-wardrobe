@@ -68,6 +68,12 @@ public class OutfitDto {
     }
 
     @Data
+    public static class AddPlanItemRequest {
+        @jakarta.validation.constraints.NotNull(message = "单品 ID 不能为空")
+        private Long itemId;
+    }
+
+    @Data
     public static class TryOnRequest {
         private String stylePreset;       // studio_white | street_shanghai | magazine_editorial | window_light
         private String customPrompt;

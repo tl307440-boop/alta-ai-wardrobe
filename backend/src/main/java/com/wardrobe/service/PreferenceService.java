@@ -26,9 +26,11 @@ public class PreferenceService {
     private static final List<Map.Entry<String, String>> CATEGORY_META = List.of(
             Map.entry("outerwear", "外套"),
             Map.entry("top", "上衣"),
+            Map.entry("dress", "连衣裙"),
             Map.entry("bottom", "下装"),
             Map.entry("shoes", "鞋履"),
-            Map.entry("accessory", "包配")
+            Map.entry("bag", "包袋"),
+            Map.entry("accessory", "配饰")
     );
 
     private static final Map<String, List<String>> SEASON_PALETTES = Map.of(

@@ -58,7 +58,8 @@ public class WardrobeService {
         WardrobeItem item = new WardrobeItem();
         item.setUserId(userId);
         item.setName(req.getName().trim());
-        item.setCategory(normalizeCategory(req.getCategory()));
+        String tagsJoined = req.getStyleTags() != null ? String.join(" ", req.getStyleTags()) : "";
+        item.setCategory(refineCategory(req.getCategory(), req.getSubCategory(), item.getName(), tagsJoined));
         item.setSubCategory(req.getSubCategory());
         item.setColor(req.getColor().trim());
         item.setColorHex(req.getColorHex() != null && !req.getColorHex().isBlank() ? req.getColorHex() : "#EFECE6");
@@ -249,13 +250,50 @@ public class WardrobeService {
         String c = cat.trim().toLowerCase();
         return switch (c) {
             case "outerwear", "外套" -> "outerwear";
-            case "top", "上衣" -> "top";
-            case "bottom", "下装", "裤子", "裙子" -> "bottom";
-            case "shoes", "鞋履", "鞋子" -> "shoes";
-            case "accessory", "包配", "包包", "配饰" -> "accessory";
-            case "dress", "连衣裙" -> "bottom";
+            case "top", "上衣", "内搭" -> "top";
+            case "dress", "连衣裙", "连体裤", "连体衣", "礼服", "礼服裙", "jsk" -> "dress";
+            case "bottom", "下装", "裤子", "半身裙", "裙子" -> "bottom";
+            case "shoes", "鞋履", "鞋子", "靴子" -> "shoes";
+            case "bag", "bags", "包袋", "包包", "手袋", "箱包" -> "bag";
+            case "accessory", "accessories", "配饰", "饰品", "首饰", "袜饰", "丝袜", "包配" -> "accessory";
             default -> "top";
         };
+    }
+
+    public static boolean isBagMeta(String name, String subCategory) {
+        String nm = Objects.toString(name, "").trim().toLowerCase(Locale.ROOT);
+        String sub = Objects.toString(subCategory, "").trim().toLowerCase(Locale.ROOT);
+        String combined = nm + " " + sub;
+        if (combined.contains("丝袜") || combined.contains("堆堆袜") || combined.contains("袜")
+                || combined.contains("项链") || combined.contains("耳环") || combined.contains("耳钉")
+                || combined.contains("耳饰") || combined.contains("手镯") || combined.contains("手链")
+                || combined.contains("戒指") || combined.contains("腕表") || combined.contains("手表")
+                || combined.contains("墨镜") || combined.contains("太阳镜") || combined.contains("围巾")
+                || combined.contains("丝巾") || combined.contains("帽") || combined.contains("腰带")
+                || combined.contains("包臀") || combined.contains("面包服")) {
+            return false;
+        }
+        if (nm.endsWith("包") || sub.endsWith("包")) {
+            return true;
+        }
+        return combined.contains("包袋") || combined.contains("托特") || combined.contains("腋下")
+                || combined.contains("手提包") || combined.contains("单肩包") || combined.contains("斜挎包")
+                || combined.contains("链条包") || combined.contains("水桶包") || combined.contains("马鞍包")
+                || combined.contains("双肩包") || combined.contains("玩偶包") || combined.contains("流浪包")
+                || combined.contains("翻盖包") || combined.contains("手袋") || combined.contains("钱包")
+                || combined.contains("背包") || combined.contains("卡包") || combined.contains("手拿包")
+                || combined.contains("tote") || combined.contains("bag");
+    }
+
+    public String refineCategory(String rawCategory, String subCategory, String name, String styleTags) {
+        String norm = normalizeCategory(rawCategory);
+        if ("accessory".equals(norm) && isBagMeta(name, subCategory)) {
+            return "bag";
+        }
+        if ("top".equals(norm) && OutfitRecommendationService.isOnePieceMeta(norm, subCategory, name, styleTags)) {
+            return "dress";
+        }
+        return norm;
     }
 
     public String inferSvgType(String category, String name) {
@@ -275,9 +313,10 @@ public class WardrobeService {
         if (n.contains("包")) return "crossbody_bag";
         return switch (category != null ? category : "top") {
             case "outerwear" -> "cardigan";
+            case "dress" -> "pleated_skirt";
             case "bottom" -> "trousers";
             case "shoes" -> "loafers";
-            case "accessory" -> "tote_bag";
+            case "bag", "accessory" -> "tote_bag";
             default -> "tshirt";
         };
     }

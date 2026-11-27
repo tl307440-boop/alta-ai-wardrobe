@@ -38,6 +38,7 @@ public class SeedDataInitializer implements ApplicationRunner {
         upgradeLegacyDemoProductUrls();
         seedDemoUserIfMissing();
         backfillDemoCuratedItems();
+        migrateLegacyCategories();
         backfillDemoItemPrices();
         upgradeLegacySvgAssetsToAltaCutouts();
     }
@@ -200,8 +201,8 @@ public class SeedDataInitializer implements ApplicationRunner {
     }
 
     /**
-     * Idempotently backfills the 35 curated demo wardrobe items (demo-p32 .. demo-p66)
-     * backed by static /alta/pieces/demo-p* assets for existing or fresh demo_user accounts.
+     * Idempotently backfills the 63 curated demo wardrobe items (demo-p32 .. demo-p84 + /alta/pieces/*.webp)
+     * backed by static /alta/pieces/ assets for existing or fresh demo_user accounts.
      */
     public void backfillDemoCuratedItems() {
         SysUser demo = userMapper.selectOne(
@@ -221,22 +222,22 @@ public class SeedDataInitializer implements ApplicationRunner {
 
         LocalDateTime baseTime = LocalDateTime.now();
         List<CuratedDemoSpec> specs = List.of(
-                new CuratedDemoSpec("酒红 连衣裙", "top", null, "酒红", "#4D3638", "spring,summer,autumn", 2, List.of("日常百搭"), null, "skirt", "photo", "399.00", 0, "/alta/pieces/demo-p32-crop.jpg", "/alta/pieces/demo-p32-cutout.png", null),
-                new CuratedDemoSpec("炭黑 包袋", "accessory", null, "炭黑", "#262628", "spring,summer,autumn,winter", 2, List.of("日常百搭"), null, "tote_bag", "photo", "329.00", 0, "/alta/pieces/demo-p33-crop.jpg", "/alta/pieces/demo-p33-cutout.png", null),
-                new CuratedDemoSpec("红黑拼接吊带连衣裙", "top", null, "红,黑", "#712622", "summer", 2, List.of("优雅", "时尚", "派对"), "聚酯纤维", "pleated_skirt", "photo", "359.00", 0, "/alta/pieces/demo-p34-crop.jpg", "/alta/pieces/demo-p34-cutout.png", null),
-                new CuratedDemoSpec("金属三角项链", "accessory", null, "金色", "#FFD700", "spring,summer,autumn,winter", 2, List.of("简约", "时尚"), "金属", "tote_bag", "photo", "159.00", 2, "/alta/pieces/demo-p35-crop.jpg", "/alta/pieces/demo-p35-cutout.png", null),
+                new CuratedDemoSpec("酒红 连衣裙", "dress", "连衣裙", "酒红", "#4D3638", "spring,summer,autumn", 2, List.of("日常百搭"), null, "skirt", "photo", "399.00", 0, "/alta/pieces/demo-p32-crop.jpg", "/alta/pieces/demo-p32-cutout.png", null),
+                new CuratedDemoSpec("炭黑 包袋", "bag", "手提包", "炭黑", "#262628", "spring,summer,autumn,winter", 2, List.of("日常百搭"), null, "tote_bag", "photo", "329.00", 0, "/alta/pieces/demo-p33-crop.jpg", "/alta/pieces/demo-p33-cutout.png", null),
+                new CuratedDemoSpec("红黑拼接吊带连衣裙", "dress", "吊带连衣裙", "红,黑", "#712622", "summer", 2, List.of("优雅", "时尚", "派对"), "聚酯纤维", "pleated_skirt", "photo", "359.00", 0, "/alta/pieces/demo-p34-crop.jpg", "/alta/pieces/demo-p34-cutout.png", null),
+                new CuratedDemoSpec("金属三角项链", "accessory", "项链", "金色", "#FFD700", "spring,summer,autumn,winter", 2, List.of("简约", "时尚"), "金属", "tote_bag", "photo", "159.00", 2, "/alta/pieces/demo-p35-crop.jpg", "/alta/pieces/demo-p35-cutout.png", null),
                 new CuratedDemoSpec("炭灰毛领修身短款辣妹夹克", "outerwear", "短款夹克", "炭黑", "#3A3A3C", "spring,autumn,winter", 2, List.of("甜酷辣妹", "Y2K", "御姐"), "斜纹棉拼仿皮草毛领", "suede_jacket", "photo", "389.00", 0, "/alta/pieces/demo-p36-crop.jpg", "/alta/pieces/demo-p36-cutout.png", "短款收腰版型配毛领，辣妹显高显比例"),
                 new CuratedDemoSpec("柔粉毛领束腰名媛短款棉服外套", "outerwear", "收腰棉服", "柔粉", "#F4C2CE", "autumn,winter", 3, List.of("芭蕾千金", "纯欲甜酷", "名媛风"), "防风科技面料+毛绒翻领", "cardigan", "photo", "569.00", 0, "/alta/pieces/demo-p37-crop.jpg", "/alta/pieces/demo-p37-cutout.png", "柔粉色收腰腰带配大毛领，冬季显瘦千金风外搭"),
                 new CuratedDemoSpec("雪绒球毛领甜美洛丽塔短外套", "outerwear", "洛丽塔外套", "米白", "#F3EDE2", "autumn,winter", 3, List.of("正统萝莉", "甜美少女", "蝴蝶结"), "仿羊羔绒拼蕾丝花边", "cardigan", "photo", "349.00", 0, "/alta/pieces/demo-p38-crop.jpg", "/alta/pieces/demo-p38-cutout.png", "毛绒翻领配小兔耳朵胸针，正统甜美萝莉冬日外搭"),
                 new CuratedDemoSpec("奶黄一字肩纯欲修身针织上衣", "top", "一字肩上衣", "米白", "#F5ECCD", "spring,autumn", 1, List.of("纯欲", "温柔韩系", "辣妹"), "软糯弹力细针织", "cardigan", "photo", "249.00", 0, "/alta/pieces/demo-p39-crop.jpg", "/alta/pieces/demo-p39-cutout.png", "温柔奶油黄一字肩露锁骨剪裁，配裙配裤都纯欲显瘦"),
-                new CuratedDemoSpec("暗黑漆皮鱼骨束腰性感包臀短裙", "top", "性感连衣裙", "炭黑", "#1C1C1E", "spring,summer,autumn", 1, List.of("御姐", "性感辣妹", "暗黑风"), "高光弹力漆皮PU", "pleated_skirt", "photo", "459.00", 0, "/alta/pieces/demo-p40-crop.jpg", "/alta/pieces/demo-p40-cutout.png", "杯型胸衣剪裁+紧身包臀廓形，夜场与派对绝对焦点"),
-                new CuratedDemoSpec("流光香槟金重工亮片方领短裙", "top", "派对连衣裙", "卡其", "#D4AF6A", "spring,summer,autumn", 1, List.of("御姐", "轻奢晚宴", "性感纯欲"), "重工满绣亮片网纱", "pleated_skirt", "photo", "529.00", 0, "/alta/pieces/demo-p41-crop.jpg", "/alta/pieces/demo-p41-cutout.png", "大U方领显锁骨与修长天鹅颈，灯光下极度闪耀"),
-                new CuratedDemoSpec("裸杏折边抹胸收腰郁金香短裙", "top", "抹胸连衣裙", "燕麦", "#DFD3C3", "spring,summer,autumn", 1, List.of("法式优雅", "千金风", "性感纯欲"), "高支挺括缎面斜纹", "pleated_skirt", "photo", "429.00", 0, "/alta/pieces/demo-p42-crop.jpg", "/alta/pieces/demo-p42-cutout.png", "抹胸立体剪裁勾勒沙漏腰臀比，高级又性感"),
-                new CuratedDemoSpec("酒红深V露背垂感长款礼服裙", "top", "长款礼服裙", "酒红", "#5E182E", "spring,summer,autumn", 1, List.of("御姐", "性感晚宴", "法式优雅"), "高垂感雪纺蕾丝", "pleated_skirt", "photo", "489.00", 0, "/alta/pieces/demo-p43-crop.jpg", "/alta/pieces/demo-p43-cutout.png", "深V领口与露背线条拉满御姐神秘冷艳气场"),
-                new CuratedDemoSpec("暗黑哥特银黑提花束腰洛丽塔JSK", "top", "哥特洛丽塔", "炭黑", "#262628", "spring,autumn,winter", 2, List.of("暗黑萝莉", "哥特风", "正统洛丽塔"), "暗纹提花缎拼网纱蕾丝", "tshirt", "photo", "580.00", 0, "/alta/pieces/demo-p44-crop.jpg", "/alta/pieces/demo-p44-cutout.png", "胸前蕾丝系带与暗纹提花裙摆，正统暗黑哥特大小姐"),
-                new CuratedDemoSpec("草莓庄园蕾丝蝴蝶结甜美洛丽塔裙", "top", "甜美洛丽塔", "米白", "#F3EDE2", "spring,summer,autumn", 1, List.of("正统萝莉", "甜美少女", "蕾丝蝴蝶结"), "印花纯棉拼水溶蕾丝", "pleated_skirt", "photo", "499.00", 0, "/alta/pieces/demo-p45-crop.jpg", "/alta/pieces/demo-p45-cutout.png", "双蝴蝶结腰饰与精致印花裙摆，经典甜美茶会洛丽塔"),
-                new CuratedDemoSpec("芭蕾千金柔粉薄纱蓬蓬仙女短裙", "top", "仙女连衣裙", "柔粉", "#F4C2CE", "spring,summer", 1, List.of("芭蕾千金", "萝莉甜美", "纯欲仙女"), "多层蓬松法式欧根纱", "pleated_skirt", "photo", "680.00", 0, "/alta/pieces/demo-p46-crop.jpg", "/alta/pieces/demo-p46-cutout.png", "梦幻粉纱蛋糕裙摆配紧身胸衣，出片率极高的在逃公主裙"),
-                new CuratedDemoSpec("宫廷黑丝绒拼奶白缎面蝴蝶结短裙", "top", "吊带短裙", "炭黑", "#262628", "spring,summer,autumn", 1, List.of("纯欲千金", "法式优雅", "性感甜酷"), "丝绒拼真丝质感缎面", "pleated_skirt", "photo", "599.00", 0, "/alta/pieces/demo-p47-crop.jpg", "/alta/pieces/demo-p47-cutout.png", "深V丝绒抹胸撞色奶白缎面裙摆与蝴蝶结，纯欲天花板"),
+                new CuratedDemoSpec("暗黑漆皮鱼骨束腰性感包臀短裙", "dress", "性感连衣裙", "炭黑", "#1C1C1E", "spring,summer,autumn", 1, List.of("御姐", "性感辣妹", "暗黑风"), "高光弹力漆皮PU", "pleated_skirt", "photo", "459.00", 0, "/alta/pieces/demo-p40-crop.jpg", "/alta/pieces/demo-p40-cutout.png", "杯型胸衣剪裁+紧身包臀廓形，夜场与派对绝对焦点"),
+                new CuratedDemoSpec("流光香槟金重工亮片方领短裙", "dress", "派对连衣裙", "卡其", "#D4AF6A", "spring,summer,autumn", 1, List.of("御姐", "轻奢晚宴", "性感纯欲"), "重工满绣亮片网纱", "pleated_skirt", "photo", "529.00", 0, "/alta/pieces/demo-p41-crop.jpg", "/alta/pieces/demo-p41-cutout.png", "大U方领显锁骨与修长天鹅颈，灯光下极度闪耀"),
+                new CuratedDemoSpec("裸杏折边抹胸收腰郁金香短裙", "dress", "抹胸连衣裙", "燕麦", "#DFD3C3", "spring,summer,autumn", 1, List.of("法式优雅", "千金风", "性感纯欲"), "高支挺括缎面斜纹", "pleated_skirt", "photo", "429.00", 0, "/alta/pieces/demo-p42-crop.jpg", "/alta/pieces/demo-p42-cutout.png", "抹胸立体剪裁勾勒沙漏腰臀比，高级又性感"),
+                new CuratedDemoSpec("酒红深V露背垂感长款礼服裙", "dress", "长款礼服裙", "酒红", "#5E182E", "spring,summer,autumn", 1, List.of("御姐", "性感晚宴", "法式优雅"), "高垂感雪纺蕾丝", "pleated_skirt", "photo", "489.00", 0, "/alta/pieces/demo-p43-crop.jpg", "/alta/pieces/demo-p43-cutout.png", "深V领口与露背线条拉满御姐神秘冷艳气场"),
+                new CuratedDemoSpec("暗黑哥特银黑提花束腰洛丽塔JSK", "dress", "哥特洛丽塔", "炭黑", "#262628", "spring,autumn,winter", 2, List.of("暗黑萝莉", "哥特风", "正统洛丽塔"), "暗纹提花缎拼网纱蕾丝", "tshirt", "photo", "580.00", 0, "/alta/pieces/demo-p44-crop.jpg", "/alta/pieces/demo-p44-cutout.png", "胸前蕾丝系带与暗纹提花裙摆，正统暗黑哥特大小姐"),
+                new CuratedDemoSpec("草莓庄园蕾丝蝴蝶结甜美洛丽塔裙", "dress", "甜美洛丽塔", "米白", "#F3EDE2", "spring,summer,autumn", 1, List.of("正统萝莉", "甜美少女", "蕾丝蝴蝶结"), "印花纯棉拼水溶蕾丝", "pleated_skirt", "photo", "499.00", 0, "/alta/pieces/demo-p45-crop.jpg", "/alta/pieces/demo-p45-cutout.png", "双蝴蝶结腰饰与精致印花裙摆，经典甜美茶会洛丽塔"),
+                new CuratedDemoSpec("芭蕾千金柔粉薄纱蓬蓬仙女短裙", "dress", "仙女连衣裙", "柔粉", "#F4C2CE", "spring,summer", 1, List.of("芭蕾千金", "萝莉甜美", "纯欲仙女"), "多层蓬松法式欧根纱", "pleated_skirt", "photo", "680.00", 0, "/alta/pieces/demo-p46-crop.jpg", "/alta/pieces/demo-p46-cutout.png", "梦幻粉纱蛋糕裙摆配紧身胸衣，出片率极高的在逃公主裙"),
+                new CuratedDemoSpec("宫廷黑丝绒拼奶白缎面蝴蝶结短裙", "dress", "吊带短裙", "炭黑", "#262628", "spring,summer,autumn", 1, List.of("纯欲千金", "法式优雅", "性感甜酷"), "丝绒拼真丝质感缎面", "pleated_skirt", "photo", "599.00", 0, "/alta/pieces/demo-p47-crop.jpg", "/alta/pieces/demo-p47-cutout.png", "深V丝绒抹胸撞色奶白缎面裙摆与蝴蝶结，纯欲天花板"),
                 new CuratedDemoSpec("星夜宫廷蕾丝一字肩鱼骨束腰上衣", "top", "鱼骨束腰", "米白", "#F3EDE2", "spring,summer,autumn", 1, List.of("纯欲仙女", "芭蕾千金", "法式宫廷"), "精致钩花蕾丝+内置鱼骨", "tshirt", "photo", "329.00", 0, "/alta/pieces/demo-p48-crop.jpg", "/alta/pieces/demo-p48-cutout.png", "微透钩花蕾丝一字肩配收腰鱼骨，勾勒迷人肩颈与纤腰"),
                 new CuratedDemoSpec("暗夜暗纹蕾丝透视高开叉长裙", "bottom", "蕾丝半身裙", "炭黑", "#262628", "spring,summer,autumn", 1, List.of("暗黑御姐", "性感纯欲", "甜酷辣妹"), "立体植绒蕾丝网纱", "pleated_skirt", "photo", "279.00", 0, "/alta/pieces/demo-p49-crop.jpg", "/alta/pieces/demo-p49-cutout.png", "半透视植绒蕾丝+高开叉剪裁，若隐若现腿部线条"),
                 new CuratedDemoSpec("冰蓝抽绳低腰辣妹百褶超短裙", "bottom", "迷你短裙", "雾霾蓝", "#B9D0DE", "spring,summer", 1, List.of("甜酷辣妹", "Y2K", "纯欲"), "垂感西装混纺", "pleated_skirt", "photo", "199.00", 0, "/alta/pieces/demo-p50-crop.jpg", "/alta/pieces/demo-p50-cutout.png", "腰侧蝴蝶结抽绳设计，清爽辣妹女团风超短裙"),
@@ -248,14 +249,42 @@ public class SeedDataInitializer implements ApplicationRunner {
                 new CuratedDemoSpec("野性豹纹尖头细跟及膝高筒靴", "shoes", "高筒长靴", "卡其", "#8C6239", "autumn,winter", 2, List.of("御姐", "性感辣妹", "摩登复古"), "丝绒感印花面料", "loafers", "photo", "549.00", 0, "/alta/pieces/demo-p56-crop.jpg", "/alta/pieces/demo-p56-cutout.png", "尖头细高跟修饰小腿线条，搭黑短裙性感又张扬"),
                 new CuratedDemoSpec("美拉德深棕麂皮细跟过膝长靴", "shoes", "过膝长靴", "焦糖棕", "#5C3A28", "autumn,winter", 2, List.of("御姐", "性感纯欲", "美拉德复古"), "弹力羊反绒麂皮", "suede_jacket", "photo", "589.00", 0, "/alta/pieces/demo-p57-crop.jpg", "/alta/pieces/demo-p57-cutout.png", "贴合腿型的过膝瘦瘦靴，配超短裙显腿长一米八"),
                 new CuratedDemoSpec("极简黑缎面露趾细高跟凉拖鞋", "shoes", "细跟凉拖", "炭黑", "#1C1C1E", "spring,summer,autumn", 1, List.of("御姐", "性感纯欲", "晚宴轻奢"), "光泽真丝缎面", "sneakers", "photo", "319.00", 0, "/alta/pieces/demo-p58-crop.jpg", "/alta/pieces/demo-p58-cutout.png", "极简一字带黑色缎面细跟凉拖，显脚背白皙修长"),
-                new CuratedDemoSpec("极简黑不对称挂锁真皮腋下包", "accessory", "腋下包", "炭黑", "#1C1C1E", "spring,summer,autumn,winter", 1, List.of("御姐", "极简轻奢", "甜酷辣妹"), "细腻素皮+金属挂锁", "crossbody_bag", "photo", "629.00", 0, "/alta/pieces/demo-p59-crop.jpg", "/alta/pieces/demo-p59-cutout.png", "利落几何翻盖与银色挂锁，提升全身造型高级感"),
-                new CuratedDemoSpec("酒红菱格绗缝链条千金单肩包", "accessory", "链条包", "酒红", "#5E182E", "spring,summer,autumn,winter", 1, List.of("御姐", "法式千金", "复古轻奢"), "绗缝软羊皮质感", "crossbody_bag", "photo", "699.00", 0, "/alta/pieces/demo-p60-crop.jpg", "/alta/pieces/demo-p60-cutout.png", "浓郁酒红配复古金属链条，搭礼服与大衣都很贵气"),
-                new CuratedDemoSpec("黑金绳结扣小香风链条单肩包", "accessory", "链条包", "炭黑", "#262628", "spring,summer,autumn,winter", 1, List.of("法式优雅", "千金风", "极简通勤"), "柔韧荔枝纹+金色链条", "crossbody_bag", "photo", "659.00", 0, "/alta/pieces/demo-p61-crop.jpg", "/alta/pieces/demo-p61-cutout.png", "经典黑金配色配雕塑感绳结扣，百搭约会与晚宴"),
-                new CuratedDemoSpec("甜美萝莉蕾丝蝴蝶结爱心手提包", "accessory", "手提包", "柔粉", "#F4C2CE", "spring,summer,autumn,winter", 1, List.of("正统萝莉", "甜美少女", "蝴蝶结"), "珠光PU+花边蝴蝶结", "crossbody_bag", "photo", "219.00", 0, "/alta/pieces/demo-p62-crop.png", "/alta/pieces/demo-p62-cutout.png", "饱满立体爱心包身与大蝴蝶结，Lo娘出街必备甜心包"),
-                new CuratedDemoSpec("暗黑哥特黑兔玩偶洛丽塔斜挎包", "accessory", "玩偶包", "炭黑", "#1C1C1E", "spring,autumn,winter", 2, List.of("暗黑萝莉", "哥特风", "甜酷少女"), "长毛绒+丝绒小礼帽", "crossbody_bag", "photo", "239.00", 0, "/alta/pieces/demo-p63-crop.jpg", "/alta/pieces/demo-p63-crop.jpg", "红黑撞色哥特垂耳兔包，背上秒变暗黑系可爱甜心"),
+                new CuratedDemoSpec("极简黑不对称挂锁真皮腋下包", "bag", "腋下包", "炭黑", "#1C1C1E", "spring,summer,autumn,winter", 1, List.of("御姐", "极简轻奢", "甜酷辣妹"), "细腻素皮+金属挂锁", "crossbody_bag", "photo", "629.00", 0, "/alta/pieces/demo-p59-crop.jpg", "/alta/pieces/demo-p59-cutout.png", "利落几何翻盖与银色挂锁，提升全身造型高级感"),
+                new CuratedDemoSpec("酒红菱格绗缝链条千金单肩包", "bag", "链条包", "酒红", "#5E182E", "spring,summer,autumn,winter", 1, List.of("御姐", "法式千金", "复古轻奢"), "绗缝软羊皮质感", "crossbody_bag", "photo", "699.00", 0, "/alta/pieces/demo-p60-crop.jpg", "/alta/pieces/demo-p60-cutout.png", "浓郁酒红配复古金属链条，搭礼服与大衣都很贵气"),
+                new CuratedDemoSpec("黑金绳结扣小香风链条单肩包", "bag", "链条包", "炭黑", "#262628", "spring,summer,autumn,winter", 1, List.of("法式优雅", "千金风", "极简通勤"), "柔韧荔枝纹+金色链条", "crossbody_bag", "photo", "659.00", 0, "/alta/pieces/demo-p61-crop.jpg", "/alta/pieces/demo-p61-cutout.png", "经典黑金配色配雕塑感绳结扣，百搭约会与晚宴"),
+                new CuratedDemoSpec("甜美萝莉蕾丝蝴蝶结爱心手提包", "bag", "手提包", "柔粉", "#F4C2CE", "spring,summer,autumn,winter", 1, List.of("正统萝莉", "甜美少女", "蝴蝶结"), "珠光PU+花边蝴蝶结", "crossbody_bag", "photo", "219.00", 0, "/alta/pieces/demo-p62-crop.png", "/alta/pieces/demo-p62-cutout.png", "饱满立体爱心包身与大蝴蝶结，Lo娘出街必备甜心包"),
+                new CuratedDemoSpec("暗黑哥特黑兔玩偶洛丽塔斜挎包", "bag", "玩偶包", "炭黑", "#1C1C1E", "spring,autumn,winter", 2, List.of("暗黑萝莉", "哥特风", "甜酷少女"), "长毛绒+丝绒小礼帽", "crossbody_bag", "photo", "239.00", 0, "/alta/pieces/demo-p63-crop.jpg", "/alta/pieces/demo-p63-crop.jpg", "红黑撞色哥特垂耳兔包，背上秒变暗黑系可爱甜心"),
                 new CuratedDemoSpec("高腰极简黑色垂感阔腿长裤", "bottom", "阔腿裤", "炭黑", "#1C1C1E", "spring,summer,autumn,winter", 2, List.of("御姐", "极简通勤", "高级感"), "高垂感西装斜纹", "trousers", "photo", "319.00", 0, "/alta/pieces/demo-p64-crop.jpg", "/alta/pieces/demo-p64-cutout.png", "高腰拉长腿部比例，配短款上衣或尖头细高跟气场满分"),
                 new CuratedDemoSpec("美拉德可可棕高腰垂感拖地西装裤", "bottom", "西装阔腿裤", "焦糖棕", "#5C3A28", "spring,autumn,winter", 2, List.of("御姐", "美拉德复古", "法式通勤"), "抗皱精纺西装面料", "trousers", "photo", "329.00", 0, "/alta/pieces/demo-p65-crop.jpg", "/alta/pieces/demo-p65-cutout.png", "温柔深棕色调显瘦显腿直，适配秋季御姐风穿搭"),
-                new CuratedDemoSpec("灰调细条纹辣妹显瘦微喇长裤", "bottom", "微喇长裤", "炭黑", "#4B4E54", "spring,autumn,winter", 2, List.of("甜酷辣妹", "Y2K", "御姐"), "弹力微喇混纺", "striped_shirt", "photo", "269.00", 0, "/alta/pieces/demo-p66-crop.jpg", "/alta/pieces/demo-p66-cutout.png", "竖条纹微喇裤型修饰腿部线条，显高显瘦")
+                new CuratedDemoSpec("灰调细条纹辣妹显瘦微喇长裤", "bottom", "微喇长裤", "炭黑", "#4B4E54", "spring,autumn,winter", 2, List.of("甜酷辣妹", "Y2K", "御姐"), "弹力微喇混纺", "striped_shirt", "photo", "269.00", 0, "/alta/pieces/demo-p66-crop.jpg", "/alta/pieces/demo-p66-cutout.png", "竖条纹微喇裤型修饰腿部线条，显高显瘦"),
+                new CuratedDemoSpec("柔粉漆皮双蝴蝶结厚底玛丽珍鞋", "shoes", "玛丽珍鞋", "柔粉", "#F4C2CE", "spring,summer,autumn", 1, List.of("正统萝莉", "甜美少女", "芭蕾千金", "蝴蝶结"), "亮面漆皮+丝带蝴蝶结", "loafers", "photo", "289.00", 0, "/alta/pieces/demo-p67-crop.jpg", "/alta/pieces/demo-p67-cutout.png", "圆头厚底双蝴蝶结玛丽珍，甜美洛丽塔与芭蕾千金专属鞋履"),
+                new CuratedDemoSpec("暗黑哥特黑纱蕾丝荷叶边立领宫廷衬衫", "top", "哥特衬衫", "炭黑", "#1C1C1E", "spring,autumn,winter", 1, List.of("暗黑萝莉", "哥特风", "暗夜御姐", "正统洛丽塔"), "微透黑纱拼立领重工蕾丝", "tshirt", "photo", "259.00", 0, "/alta/pieces/demo-p70-crop.jpg", "/alta/pieces/demo-p70-cutout.png", "宫廷立领荷叶边黑蕾丝，暗黑哥特与Livehouse演出核心内搭"),
+                new CuratedDemoSpec("法式米白尖头珍珠绊带猫跟单鞋", "shoes", "猫跟单鞋", "米白", "#F3EDE2", "spring,summer,autumn", 1, List.of("法式优雅", "千金风", "温柔韩系", "约会", "晚宴轻奢", "美术馆看展"), "柔韧小羊皮+淡水珍珠绊带", "loafers", "photo", "429.00", 0, "/alta/pieces/demo-p72-crop.jpg", "/alta/pieces/demo-p72-cutout.png", "4cm优雅低猫跟配珍珠踝带，精致舒适显脚踝纤细"),
+                new CuratedDemoSpec("极简全黑长款修身西装大衣", "outerwear", "长款西装大衣", "炭黑", "#1C1C1E", "spring,autumn,winter", 3, List.of("全黑冷感", "御姐", "极简通勤", "晚宴轻奢", "显高气场"), "精纺垂感羊毛混纺", "blazer", "photo", "799.00", 0, "/alta/pieces/black-blazer.webp", "/alta/pieces/black-blazer.webp", "利落长款修身H廓形，全黑酷感与晚宴酒会御姐气场外搭"),
+                new CuratedDemoSpec("全黑金扣饰修身极简长袖衬衫", "top", "修身衬衫", "炭黑", "#1C1C1E", "spring,autumn,winter", 1, List.of("全黑冷感", "御姐", "极简通勤", "甜酷辣妹"), "高支抗皱精纺棉+领角金扣", "tshirt", "photo", "299.00", 0, "/alta/pieces/black-slim-shirt.webp", "/alta/pieces/black-slim-shirt.webp", "暗门襟极简剪裁点缀金色领角扣，全黑层次穿搭利器"),
+                new CuratedDemoSpec("全黑银扣极简直筒及膝骑士长靴", "shoes", "及膝骑士靴", "炭黑", "#1C1C1E", "spring,autumn,winter", 2, List.of("全黑冷感", "显腿长", "御姐", "甜酷辣妹", "暗黑哥特", "极简轻奢"), "细腻头层小牛皮+银色金属扣", "loafers", "photo", "689.00", 0, "/alta/pieces/black-knee-boots.webp", "/alta/pieces/black-knee-boots.webp", "挺括直筒鞋型修饰小腿线条，全黑显腿长冷感与暗黑演出核心战靴"),
+                new CuratedDemoSpec("极简全黑高腰直筒开叉长裙", "bottom", "直筒半身裙", "炭黑", "#1C1C1E", "spring,summer,autumn,winter", 2, List.of("全黑冷感", "御姐", "极简通勤", "显腿长"), "高垂感西装斜纹", "pleated_skirt", "photo", "319.00", 0, "/alta/pieces/black-maxi-skirt.webp", "/alta/pieces/black-maxi-skirt.webp", "高腰直筒修饰腿长比例，全黑冷感酷女孩高级感下装"),
+                new CuratedDemoSpec("极简全黑银扣大容量通勤托特包", "bag", "大容量托特包", "炭黑", "#1C1C1E", "spring,summer,autumn,winter", 2, List.of("极简通勤", "全黑冷感", "干练面试", "学院风", "装电脑"), "挺括头层牛皮+银色皮带扣", "tote_bag", "photo", "599.00", 0, "/alta/pieces/black-tote.webp", "/alta/pieces/black-tote.webp", "可轻松容纳14寸笔记本电脑，面试、图书馆自习与全黑造型全能包"),
+                new CuratedDemoSpec("经典极简纯白垂感通勤学院衬衫", "top", "纯白衬衫", "纯白", "#FFFFFF", "spring,summer,autumn", 1, List.of("学院风", "极简通勤", "干练面试", "复古英伦", "百搭"), "高支免烫长绒棉", "tshirt", "photo", "249.00", 0, "/alta/pieces/white-blouse.webp", "/alta/pieces/white-blouse.webp", "干净挺括的经典白衬衫，叠穿V领针织背心与西装裤/百褶裙极佳"),
+                new CuratedDemoSpec("复古深咖双排扣英伦羊毛大衣", "outerwear", "羊毛大衣", "焦糖棕", "#5C3A28", "autumn,winter", 3, List.of("复古英伦", "学院风", "美拉德复古", "保暖", "图书馆"), "80%双面澳毛呢", "trench", "photo", "899.00", 0, "/alta/pieces/brown-wool-coat.webp", "/alta/pieces/brown-wool-coat.webp", "温润深咖长款双排扣羊毛大衣，降温天去图书馆自习保暖又有英伦学院感"),
+                new CuratedDemoSpec("奶白复古麻花针织学院毛衣", "top", "针织毛衣", "米白", "#F3EDE2", "spring,autumn,winter", 2, List.of("学院风", "复古英伦", "温柔韩系", "图书馆", "保暖"), "软糯美利奴羊毛绞花", "cardigan", "photo", "349.00", 0, "/alta/pieces/cream-polo-knit.webp", "/alta/pieces/cream-polo-knit.webp", "经典奶白绞花学院风针织毛衣，保暖舒适配墨绿百褶裙或格纹裤绝佳"),
+                new CuratedDemoSpec("复古英伦焦糖格纹高腰阔腿裤", "bottom", "格纹阔腿裤", "卡其", "#9B7E5C", "spring,autumn,winter", 2, List.of("复古英伦", "学院风", "美拉德复古", "图书馆", "复古休闲"), "精纺复古小格纹毛呢", "trousers", "photo", "339.00", 0, "/alta/pieces/checked-wide-pants.webp", "/alta/pieces/checked-wide-pants.webp", "经典英伦格纹直筒阔腿剪裁，图书馆复古学院与秋冬咖啡厅百搭"),
+                new CuratedDemoSpec("极简黑亮面厚底英伦乐福鞋", "shoes", "皮质乐福鞋", "炭黑", "#1C1C1E", "spring,autumn,winter", 2, List.of("学院风", "极简通勤", "干练面试", "全黑冷感", "复古英伦"), "抛光头层牛皮", "loafers", "photo", "499.00", 0, "/alta/pieces/black-loafers.webp", "/alta/pieces/black-loafers.webp", "经典黑色圆头乐福鞋，面试通勤、复古学院与全黑出街百搭"),
+                new CuratedDemoSpec("香槟米真丝缎面法式垂感衬衫", "top", "缎面衬衫", "燕麦", "#DFD3C3", "spring,summer,autumn", 1, List.of("法式优雅", "千金风", "美术馆看展", "温柔韩系", "轻奢高级"), "光泽真丝醋酸缎面", "tshirt", "photo", "389.00", 0, "/alta/pieces/beige-satin-shirt.webp", "/alta/pieces/beige-satin-shirt.webp", "自带柔光珍珠光泽的香槟米缎面衬衫，美术馆看展与法式轻奢绝配"),
+                new CuratedDemoSpec("法式浅燕麦双排扣系带羊毛大衣", "outerwear", "系带羊毛大衣", "燕麦", "#DFD3C3", "spring,autumn,winter", 3, List.of("法式优雅", "千金风", "美术馆看展", "温柔韩系", "极简通勤"), "高支双面精纺羊毛", "trench", "photo", "959.00", 0, "/alta/pieces/beige-belted-coat.webp", "/alta/pieces/beige-belted-coat.webp", "收腰系带大翻领浅燕麦大衣，法式千金看展与高级通勤必备"),
+                new CuratedDemoSpec("法式奶白金扣复古马鞍腋下包", "bag", "马鞍腋下包", "米白", "#F5F2EB", "spring,summer,autumn,winter", 1, List.of("法式优雅", "千金风", "美术馆看展", "甜美少女", "温柔韩系"), "精致浮雕小牛皮+做旧金扣", "crossbody_bag", "photo", "689.00", 0, "/alta/pieces/white-saddle-bag.webp", "/alta/pieces/white-saddle-bag.webp", "经典奶白流线马鞍包配金色D字吊坠，法式千金与甜美系亮眼点缀"),
+                new CuratedDemoSpec("暗夜蕾丝花边超薄透肤黑丝袜", "accessory", "过膝丝袜", "炭黑", "#1C1C1E", "spring,summer,autumn,winter", 1, List.of("性感纯欲", "黑丝", "暗黑辣妹", "JK制服", "夜店派对"), "超薄天鹅绒丝质+法式花边蕾丝", "tote_bag", "photo", "59.00", 0, "/alta/pieces/demo-p73-crop.jpg", "/alta/pieces/demo-p73-cutout.png", "高挑蕾丝花边透肤黑丝过膝袜，搭超短裙与JK百褶裙纯欲吸睛"),
+                new CuratedDemoSpec("法式蕾丝蝴蝶结吊带过膝黑丝袜", "accessory", "吊带丝袜", "炭黑", "#1C1C1E", "spring,summer,autumn,winter", 1, List.of("性感纯欲", "黑丝", "暗黑辣妹", "御姐", "夜店派对"), "透肤网纱蕾丝+吊袜带+丝绒带", "tote_bag", "photo", "89.00", 0, "/alta/pieces/demo-p74-crop.jpg", "/alta/pieces/demo-p74-cutout.png", "法式蕾丝吊袜带与透肤黑丝组合，暗夜氛围与性感辣妹进阶配饰"),
+                new CuratedDemoSpec("暗黑辣妹菱格渔网镂空丝袜", "accessory", "渔网丝袜", "炭黑", "#1C1C1E", "spring,summer,autumn", 1, List.of("暗黑辣妹", "性感纯欲", "Y2K", "夜店派对", "渔网黑丝"), "高弹力菱格渔网锦纶", "tote_bag", "photo", "49.00", 0, "/alta/pieces/demo-p75-crop.jpg", "/alta/pieces/demo-p75-cutout.png", "镂空菱格渔网丝袜，配皮质短裙与长靴瞬间拉满Y2K辣妹张力"),
+                new CuratedDemoSpec("日系收腰短袖海军领格纹结JK水手服上衣", "top", "JK水手服", "纯白", "#FFFFFF", "spring,summer,autumn", 1, List.of("JK制服", "日系学院", "纯欲甜辣", "水手服"), "挺括制服斜纹棉+格纹领结", "tshirt", "photo", "169.00", 0, "/alta/pieces/demo-p76-crop.jpg", "/alta/pieces/demo-p76-cutout.png", "经典收腰短款海军领JK水手服上衣，配格纹百褶短裙与黑丝/堆堆袜绝配"),
+                new CuratedDemoSpec("复古焦糖格纹高腰JK百褶超短裙", "bottom", "JK格裙", "焦糖棕", "#6E4733", "spring,summer,autumn", 1, List.of("JK制服", "日系学院", "百褶短裙", "甜酷辣妹", "格纹"), "高温定型TR制服呢", "pleated_skirt", "photo", "159.00", 0, "/alta/pieces/demo-p77-crop.jpg", "/alta/pieces/demo-p77-cutout.png", "锋利刀褶高腰显腿长JK格裙，适配水手服、短款辣妹上衣与过膝黑丝"),
+                new CuratedDemoSpec("燕麦细格纹系带高腰JK百褶超短裙", "bottom", "JK格裙", "燕麦", "#D2CABD", "spring,summer,autumn", 1, List.of("JK制服", "日系学院", "百褶短裙", "纯欲甜辣", "格纹"), "高温定型TR制服呢", "pleated_skirt", "photo", "169.00", 0, "/alta/pieces/demo-p78-crop.jpg", "/alta/pieces/demo-p78-cutout.png", "高腰百褶系带细格纹JK短裙，搭堆堆袜与黑丝清纯又显腿长"),
+                new CuratedDemoSpec("日系软糯纯白粗针织宽松堆堆袜", "accessory", "堆堆袜", "纯白", "#FAF8F5", "spring,autumn,winter", 2, List.of("JK制服", "堆堆袜", "日系学院", "Y2K", "纯欲辣妹"), "软糯粗针绞花精梳棉", "tote_bag", "photo", "39.00", 0, "/alta/pieces/demo-p79-crop.jpg", "/alta/pieces/demo-p79-cutout.png", "软糯粗针织宽松堆堆袜套，修饰小腿线条，JK制服与乐福鞋点睛配饰"),
+                new CuratedDemoSpec("Y2K暗黑辣妹炭黑针织微喇堆堆袜", "accessory", "堆堆袜", "炭黑", "#1C1C1E", "spring,autumn,winter", 2, List.of("Y2K", "暗黑辣妹", "堆堆袜", "JK制服", "甜酷辣妹"), "弹力微喇粗针棉混纺", "tote_bag", "photo", "45.00", 0, "/alta/pieces/demo-p80-crop.jpg", "/alta/pieces/demo-p80-cutout.png", "炭黑微喇五角星织纹堆堆袜，甜酷Y2K辣妹与暗黑JK百褶裙必备"),
+                new CuratedDemoSpec("纯欲辣妹黑色挂脖深V前扣露背短上衣", "top", "挂脖露背上衣", "炭黑", "#1C1C1E", "spring,summer,autumn", 1, List.of("性感辣妹", "纯欲", "露背", "夜店派对", "暗黑风"), "哑光弹力仿小羊皮+金属前扣", "tshirt", "photo", "229.00", 0, "/alta/pieces/demo-p81-crop.jpg", "/alta/pieces/demo-p81-cutout.png", "深V前扣+大露背挂脖剪裁勾勒肩颈与腰线，性感辣妹夜场与约会核心单品"),
+                new CuratedDemoSpec("暗黑性感漆皮镂空交叉绑带挂脖短上衣", "top", "绑带露背上衣", "炭黑", "#1C1C1E", "spring,summer,autumn", 1, List.of("暗黑辣妹", "性感纯欲", "Y2K", "夜店派对", "镂空绑带"), "光泽PU皮革+金属鸡眼绑带", "tshirt", "photo", "249.00", 0, "/alta/pieces/demo-p82-crop.jpg", "/alta/pieces/demo-p82-cutout.png", "胸前交叉镂空金属鸡眼绑带配修身皮革廓形，高攻击性性感辣妹短上衣"),
+                new CuratedDemoSpec("极简全黑高腰辣妹包臀A字超短裙", "bottom", "超短裙", "炭黑", "#1C1C1E", "spring,summer,autumn", 1, List.of("性感辣妹", "纯欲", "全黑冷感", "夜店派对", "超短裙"), "高弹修身挺括斜纹", "pleated_skirt", "photo", "199.00", 0, "/alta/pieces/black-mini-skirt.webp", "/alta/pieces/black-mini-skirt.webp", "高腰极简黑色包臀A字超短裙，百搭挂脖露背上衣、黑丝与渔网袜"),
+                new CuratedDemoSpec("酒红深V铆钉挂脖褶皱露背超短连衣裙", "dress", "性感连衣裙", "酒红", "#5E182E", "spring,summer,autumn", 1, List.of("性感辣妹", "纯欲", "御姐", "夜店派对", "露背"), "高弹抓褶亲肤针织+金属铆钉", "pleated_skirt", "photo", "359.00", 0, "/alta/pieces/demo-p84-crop.jpg", "/alta/pieces/demo-p84-cutout.png", "浓郁酒红深V挂脖配修身抓褶包臀剪裁，清吧派对与约会一眼惊艳")
         );
 
         int inserted = 0;
@@ -270,6 +299,61 @@ public class SeedDataInitializer implements ApplicationRunner {
         }
         if (inserted > 0) {
             log.info("Backfilled {} curated demo wardrobe items for demo_user.", inserted);
+        }
+    }
+
+    /**
+     * Idempotent category migration for existing H2 / MySQL volumes created under the old 5-category model:
+     * moves bags out of 'accessory' into 'bag' and one-piece dresses out of 'top' into 'dress'.
+     */
+    public void migrateLegacyCategories() {
+        int movedBags = 0;
+        int movedDresses = 0;
+        int patchedSub = 0;
+
+        List<WardrobeItem> allItems = wardrobeItemMapper.selectList(null);
+        for (WardrobeItem it : allItems) {
+            boolean dirty = false;
+            String cat = it.getCategory();
+            if ("accessory".equalsIgnoreCase(cat) && WardrobeService.isBagMeta(it.getName(), it.getSubCategory())) {
+                it.setCategory("bag");
+                if (it.getSubCategory() == null || it.getSubCategory().isBlank()) {
+                    it.setSubCategory("包袋");
+                }
+                movedBags++;
+                dirty = true;
+            } else if ("accessory".equalsIgnoreCase(cat)
+                    && it.getName() != null && it.getName().contains("项链")
+                    && (it.getSubCategory() == null || it.getSubCategory().isBlank())) {
+                it.setSubCategory("项链");
+                patchedSub++;
+                dirty = true;
+            } else if ("top".equalsIgnoreCase(cat) && OutfitRecommendationService.isOnePieceEntity(it)) {
+                it.setCategory("dress");
+                if (it.getSubCategory() == null || it.getSubCategory().isBlank()) {
+                    it.setSubCategory("连衣裙");
+                }
+                movedDresses++;
+                dirty = true;
+            }
+            if (dirty) {
+                wardrobeItemMapper.updateById(it);
+            }
+        }
+
+        int movedProducts = 0;
+        List<MockProduct> products = mockProductMapper.selectList(null);
+        for (MockProduct p : products) {
+            if ("accessory".equalsIgnoreCase(p.getCategory()) && WardrobeService.isBagMeta(p.getTitle(), null)) {
+                p.setCategory("bag");
+                mockProductMapper.updateById(p);
+                movedProducts++;
+            }
+        }
+
+        if (movedBags > 0 || movedDresses > 0 || movedProducts > 0 || patchedSub > 0) {
+            log.info("Migrated legacy categories: {} items -> bag, {} items -> dress, {} products -> bag, {} subCategories.",
+                    movedBags, movedDresses, movedProducts, patchedSub);
         }
     }
 
@@ -355,7 +439,7 @@ public class SeedDataInitializer implements ApplicationRunner {
                 buildProduct("复古厚底深棕漆皮乐福鞋平替", "shoes", "焦糖棕", "#8A5230", "loafers",
                         List.of("极简通勤", "学院风"), "178.00", "taobao", "https://s.taobao.com/search?q=%E5%A4%8D%E5%8F%A4%E5%8E%9A%E5%BA%95%E6%B7%B1%E6%A3%95%E6%BC%86%E7%9A%AE%E4%B9%90%E7%A6%8F%E9%9E%8B",
                         "200元内质感通勤鞋履，软底不磨脚", now),
-                buildProduct("哑光软皮大容量极简通勤托特包", "accessory", "炭黑", "#262628", "tote_bag",
+                buildProduct("哑光软皮大容量极简通勤托特包", "bag", "炭黑", "#262628", "tote_bag",
                         List.of("极简通勤", "干练面试"), "158.00", "taobao", "https://s.taobao.com/search?q=%E5%93%91%E5%85%89%E8%BD%AF%E7%9A%AE%E5%A4%A7%E5%AE%B9%E9%87%8F%E6%9E%81%E7%AE%80%E9%80%9A%E5%8B%A4%E6%89%98%E7%89%B9%E5%8C%85",
                         "可装14寸笔记本，与黑西装裤呼应显高级", now),
                 buildProduct("极简浅燕麦垂感高腰阔腿西裤", "bottom", "燕麦", "#DFD3C3", "trousers",
@@ -370,7 +454,7 @@ public class SeedDataInitializer implements ApplicationRunner {
                 buildProduct("Clean Fit 复古翻毛拼接德训鞋", "shoes", "米白", "#F3EDE2", "sneakers",
                         List.of("Clean Fit", "日常休闲"), "219.00", "taobao", "https://s.taobao.com/search?q=Clean%20Fit%20%E5%A4%8D%E5%8F%A4%E7%BF%BB%E6%AF%9B%E6%8B%BC%E6%8E%A5%E5%BE%B7%E8%AE%AD%E9%9E%8B",
                         "生胶防滑大底，暴走一万步依旧舒适百搭", now),
-                buildProduct("法式复古焦糖牛皮马鞍腋下包", "accessory", "焦糖棕", "#8A5230", "crossbody_bag",
+                buildProduct("法式复古焦糖牛皮马鞍腋下包", "bag", "焦糖棕", "#8A5230", "crossbody_bag",
                         List.of("法式松弛", "美拉德复古", "约会"), "188.00", "jd", "https://search.jd.com/Search?keyword=%E6%B3%95%E5%BC%8F%E5%A4%8D%E5%8F%A4%E7%84%A6%E7%B3%96%E7%89%9B%E7%9A%AE%E9%A9%AC%E9%9E%8D%E8%85%8B%E4%B8%8B%E5%8C%85",
                         "低饱和焦糖金属扣设计，点亮简约基础款全身造型", now)
         );
@@ -429,9 +513,9 @@ public class SeedDataInitializer implements ApplicationRunner {
                         List.of("极简通勤", "美拉德复古", "学院风"), "头层牛皮", "loafers", "screenshot", "499.00", 11, now),
                 buildItem(uid, "复古米灰德训鞋", "shoes", "德训鞋", "燕麦", "#DFD3C3", "spring,summer,autumn,winter", 2,
                         List.of("Clean Fit", "日常休闲"), "翻毛皮拼接", "sneakers", "photo", "459.00", 10, now),
-                buildItem(uid, "燕麦帆布拼皮托特包", "accessory", "托特包", "燕麦", "#DFD3C3", "spring,summer,autumn,winter", 2,
+                buildItem(uid, "燕麦帆布拼皮托特包", "bag", "托特包", "燕麦", "#DFD3C3", "spring,summer,autumn,winter", 2,
                         List.of("极简通勤", "温柔韩系"), "荔枝纹牛皮", "tote_bag", "photo", "389.00", 15, now),
-                buildItem(uid, "焦糖复古马鞍腋下包", "accessory", "腋下包", "焦糖棕", "#8A5230", "spring,autumn,winter", 2,
+                buildItem(uid, "焦糖复古马鞍腋下包", "bag", "腋下包", "焦糖棕", "#8A5230", "spring,autumn,winter", 2,
                         List.of("美拉德复古", "约会"), "植鞣牛皮", "crossbody_bag", "photo", "529.00", 2, now),
                 buildItem(uid, "浅燕麦微廓形西装", "outerwear", "西装外套", "燕麦", "#DFD3C3", "spring,autumn", 2,
                         List.of("极简通勤", "干练面试"), "精纺混纺", "blazer", "photo", "599.00", 7, now)

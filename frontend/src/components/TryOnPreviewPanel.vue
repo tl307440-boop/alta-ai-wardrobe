@@ -184,12 +184,16 @@ const bodyZonePosition = computed(() => {
     case 'outerwear':
     case 'top':
       return { top: '28%', left: '50%', label: '上身区域' };
+    case 'dress':
+      return { top: '48%', left: '50%', label: '连衣裙主体' };
     case 'bottom':
       return { top: '60%', left: '50%', label: '下装区域' };
     case 'shoes':
       return { top: '87%', left: '50%', label: '足部鞋履' };
+    case 'bag':
+      return { top: '46%', left: '68%', label: '包袋配搭' };
     case 'accessory':
-      return { top: '46%', left: '68%', label: '包配细节' };
+      return { top: '68%', left: '56%', label: '配饰细节' };
     default:
       return null;
   }

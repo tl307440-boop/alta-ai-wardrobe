@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { CollageNode, OutfitPlanVo, PlanSlot, WardrobeItem } from '@/types';
 import { useWardrobeStore } from '@/stores/wardrobe';
@@ -16,6 +16,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'save-layout', nodes: CollageNode[]): void;
   (e: 'swap-slot', slotKey: string, currentItemId: number): void;
+  (e: 'remove-slot', itemId: number): void;
+  (e: 'open-add-item'): void;
 }>();
 
 const route = useRoute();
@@ -75,9 +77,11 @@ function buildDefaultLayout(slots: PlanSlot[]): CollageNode[] {
   const categoryPresets: Record<string, { x: number; y: number; scale: number; rotation: number; zIndex: number }> = {
     outerwear: { x: 27, y: 36, scale: 1.14, rotation: -4, zIndex: 4 },
     top: { x: 54, y: 27, scale: 0.98, rotation: 2, zIndex: 2 },
+    dress: { x: 48, y: 46, scale: 1.18, rotation: -1, zIndex: 3 },
     bottom: { x: 48, y: 65, scale: 1.12, rotation: -1, zIndex: 3 },
     shoes: { x: 75, y: 76, scale: 0.88, rotation: 5, zIndex: 5 },
-    accessory: { x: 78, y: 40, scale: 0.82, rotation: 6, zIndex: 6 },
+    bag: { x: 78, y: 36, scale: 0.84, rotation: 5, zIndex: 6 },
+    accessory: { x: 22, y: 74, scale: 0.78, rotation: -4, zIndex: 7 },
   };
   const usedCounts: Record<string, number> = {};
 
@@ -119,6 +123,11 @@ function hydrateNodes(plan: OutfitPlanVo) {
   const usedSavedIndices = new Set<number>();
   const mergedSlots: CollageNode[] = defaults.map((def) => {
     let idx = saved.findIndex((s, i) => !usedSavedIndices.has(i) && s.nodeKey === def.nodeKey);
+    if (idx < 0 && def.itemId > 0) {
+      idx = saved.findIndex(
+        (s, i) => !usedSavedIndices.has(i) && !s.labelText && s.itemId === def.itemId
+      );
+    }
     if (idx < 0) {
       idx = saved.findIndex(
         (s, i) => !usedSavedIndices.has(i) && !s.labelText && s.slotKey === def.slotKey && !s.nodeKey?.includes('-copy-') && !s.nodeKey?.startsWith('wardrobe-') && !s.nodeKey?.startsWith('acc-')
@@ -342,6 +351,48 @@ function handleSave() {
   hasUnsavedChanges.value = false;
 }
 
+function removeSelectedNode() {
+  const node = selectedNode.value;
+  if (!node) return;
+  if (node.labelText || !node.itemId || node.itemId <= 0) {
+    nodes.value = nodes.value.filter((n) => n.nodeKey !== node.nodeKey);
+    selectedKey.value = null;
+    hasUnsavedChanges.value = true;
+    toast.show('已从画板移除该元素');
+    return;
+  }
+  const ownedCount = (props.plan.slots || []).filter((s) => !s.missing && s.item?.id > 0).length;
+  if (ownedCount <= 1) {
+    toast.show('搭配至少需保留 1 件衣橱单品');
+    return;
+  }
+  const targetItemId = node.itemId;
+  selectedKey.value = null;
+  emit('remove-slot', targetItemId);
+}
+
+function onWindowKeydown(e: KeyboardEvent) {
+  if (studioOpen.value || !selectedNode.value) return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  const target = e.target as HTMLElement | null;
+  if (
+    target &&
+    (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+  ) {
+    return;
+  }
+  e.preventDefault();
+  removeSelectedNode();
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeydown);
+});
+
 function handleStudioUpdateNodes(nextNodes: CollageNode[]) {
   nodes.value = nextNodes.map((n) => ({ ...n }));
   hasUnsavedChanges.value = true;
@@ -499,6 +550,15 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
     >
       <!-- Top-Left Minimal Floating Actions -->
       <div class="absolute top-3 left-3 z-[40] flex items-center gap-1 p-1 rounded-full bg-white/92 backdrop-blur-md border border-black/[0.08] shadow-sm text-[11.5px]">
+        <button
+          type="button"
+          @click.stop="emit('open-add-item')"
+          title="从衣橱添加单品到当前搭配"
+          class="px-2.5 py-1 rounded-full bg-black text-white hover:bg-[#262626] font-medium transition inline-flex items-center gap-1"
+        >
+          <AppIcon name="plus" :size="11" />
+          加单品
+        </button>
         <button
           type="button"
           @click.stop="resetAutoLayout"
@@ -686,15 +746,27 @@ function loadImageSafe(src: string): Promise<HTMLImageElement | null> {
         </div>
       </div>
 
-      <button
-        v-if="selectedSlot && !selectedSlot.anchor"
-        type="button"
-        @click="emit('swap-slot', selectedSlot.slotKey, selectedSlot.item.id)"
-        class="px-3 h-7 rounded-full bg-white text-black hover:bg-white/90 font-medium flex items-center gap-1 shrink-0"
-      >
-        <AppIcon name="refresh" :size="11" />
-        换一件
-      </button>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button
+          v-if="selectedSlot && !selectedSlot.anchor"
+          type="button"
+          @click="emit('swap-slot', selectedSlot.slotKey, selectedSlot.item.id)"
+          class="px-3 h-7 rounded-full bg-white text-black hover:bg-white/90 font-medium flex items-center gap-1"
+        >
+          <AppIcon name="refresh" :size="11" />
+          换一件
+        </button>
+        <button
+          v-if="selectedNode"
+          type="button"
+          @click="removeSelectedNode"
+          title="从当前搭配移除此单品 (Delete)"
+          class="px-3 h-7 rounded-full bg-white/15 hover:bg-red-500 text-white font-medium flex items-center gap-1 transition"
+        >
+          <AppIcon name="trash" :size="11" />
+          移除
+        </button>
+      </div>
     </div>
 
     <!-- Full-Viewport Standalone Flat-Lay Studio Modal -->

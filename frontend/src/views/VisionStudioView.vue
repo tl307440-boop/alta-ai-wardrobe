@@ -122,8 +122,10 @@ const SAMPLES: ScanSample[] = [
 const DEFAULT_SVG_BY_CATEGORY: Record<string, string> = {
   outerwear: 'trench',
   top: 'tshirt',
+  dress: 'pleated_skirt',
   bottom: 'trousers',
   shoes: 'sneakers',
+  bag: 'tote_bag',
   accessory: 'tote_bag',
 };
 
@@ -242,6 +244,9 @@ function categoriesCompatible(segCat: string, vlmCat: string): boolean {
   if ((segCat === 'top' || segCat === 'outerwear') && (vlmCat === 'top' || vlmCat === 'outerwear')) {
     return true;
   }
+  if ((segCat === 'bag' || segCat === 'accessory') && (vlmCat === 'bag' || vlmCat === 'accessory')) {
+    return true;
+  }
   return false;
 }
 
@@ -249,13 +254,16 @@ function categoryIconName(cat: string): string {
   switch (cat) {
     case 'outerwear':
     case 'top':
+    case 'dress':
       return 'shirt';
     case 'bottom':
       return 'layers';
     case 'shoes':
       return 'sparkles';
-    case 'accessory':
+    case 'bag':
       return 'shopping-bag';
+    case 'accessory':
+      return 'sparkles';
     default:
       return 'tag';
   }
@@ -480,7 +488,7 @@ function selectScanSample(sample: ScanSample) {
 function inferSeasons(category: string, name: string): string[] {
   if (/羽绒|棉服|大衣|毛衣|马甲|加绒|靴/.test(name)) return ['秋', '冬'];
   if (/短袖|t恤|背心|短裤|半裙|凉鞋|吊带/i.test(name)) return ['春', '夏'];
-  if (category === 'accessory') return [...SEASON_OPTIONS];
+  if (category === 'bag' || category === 'accessory') return [...SEASON_OPTIONS];
   return ['春', '秋'];
 }
 

@@ -53,6 +53,19 @@ public class OutfitController {
                 outfitService.saveCollageLayout(UserContextHolder.getUserId(), id, req));
     }
 
+    @PostMapping("/outfit/plans/{id}/items")
+    public Result<OutfitDto.PlanVo> addPlanItem(@PathVariable Long id,
+                                                @jakarta.validation.Valid @RequestBody OutfitDto.AddPlanItemRequest req) {
+        return Result.ok("已添加到当前穿搭",
+                outfitService.addPlanItem(UserContextHolder.getUserId(), id, req.getItemId()));
+    }
+
+    @DeleteMapping("/outfit/plans/{id}/items/{itemId}")
+    public Result<OutfitDto.PlanVo> removePlanItem(@PathVariable Long id, @PathVariable Long itemId) {
+        return Result.ok("已从当前穿搭移除",
+                outfitService.removePlanItem(UserContextHolder.getUserId(), id, itemId));
+    }
+
     @PostMapping("/outfit/plans/{id}/try-on")
     public Result<OutfitDto.TryOnResultVo> generateTryOn(@PathVariable Long id,
                                                          @RequestBody(required = false) OutfitDto.TryOnRequest req,

@@ -85,10 +85,11 @@ const historyIndex = ref(-1);
 const CATEGORY_FILTERS = [
   { key: 'all', label: '全部' },
   { key: 'outerwear', label: '外套' },
-  { key: 'top', label: '上装' },
-  { key: 'bottom', label: '下装' },
+  { key: 'top', label: '上衣' },
   { key: 'dress', label: '连衣裙' },
+  { key: 'bottom', label: '下装' },
   { key: 'shoes', label: '鞋履' },
+  { key: 'bag', label: '包袋' },
   { key: 'accessory', label: '配饰' },
 ];
 
@@ -101,9 +102,9 @@ const STUDIO_ACCESSORIES = [
   { id: 'acc-watch-silver', name: '经典精钢银盘腕表', category: 'accessory', imageUrl: '/alta/pieces/seiko-watch.webp', colorHex: '#C0C0C0' },
   { id: 'acc-glasses', name: '极简椭圆黑框墨镜', category: 'accessory', imageUrl: '/alta/pieces/black-sunglasses.webp', colorHex: '#1A1A1A' },
   { id: 'acc-scarf', name: '法式撞色桑蚕丝方巾', category: 'accessory', imageUrl: '/alta/pieces/silk-scarf.webp', colorHex: '#8E352E' },
-  { id: 'acc-bag-crescent', name: '大象灰真皮月牙腋下包', category: 'accessory', imageUrl: '/alta/pieces/taupe-crescent-bag.webp', colorHex: '#B2A89F' },
-  { id: 'acc-bag-tote', name: '奶油白荔枝纹托特包', category: 'accessory', imageUrl: '/alta/pieces/cream-tote.webp', colorHex: '#F3EFE6' },
-  { id: 'acc-bag-red', name: '勃艮第红麂皮单肩包', category: 'accessory', imageUrl: '/alta/pieces/red-suede-bag.webp', colorHex: '#7A2326' },
+  { id: 'acc-bag-crescent', name: '大象灰真皮月牙腋下包', category: 'bag', imageUrl: '/alta/pieces/taupe-crescent-bag.webp', colorHex: '#B2A89F' },
+  { id: 'acc-bag-tote', name: '奶油白荔枝纹托特包', category: 'bag', imageUrl: '/alta/pieces/cream-tote.webp', colorHex: '#F3EFE6' },
+  { id: 'acc-bag-red', name: '勃艮第红麂皮单肩包', category: 'bag', imageUrl: '/alta/pieces/red-suede-bag.webp', colorHex: '#7A2326' },
   { id: 'acc-shawl', name: '软糯针织披肩外搭', category: 'accessory', imageUrl: '/alta/pieces/sweater-shawl.webp', colorHex: '#E5DEC9' },
 ];
 
@@ -589,7 +590,7 @@ function addWardrobePiece(item: WardrobeItem) {
     itemId: item.id,
     x: Number((center.x + jitter).toFixed(1)),
     y: Number((center.y + jitter).toFixed(1)),
-    scale: item.category === 'accessory' ? 0.88 : 1.08,
+    scale: item.category === 'accessory' || item.category === 'bag' ? 0.88 : 1.08,
     rotation: 0,
     zIndex: maxZ + 1,
     flipX: false,
@@ -730,7 +731,8 @@ async function applyLayoutPreset(preset: 'editorial' | 'wide' | 'scattered') {
       dress: { x: 40, y: 48, scale: 1.32, rot: -2, z: 3 },
       bottom: { x: 52, y: 68, scale: 1.24, rot: -1, z: 3 },
       shoes: { x: 82, y: 74, scale: 1.0, rot: 5, z: 5 },
-      accessory: { x: 84, y: 34, scale: 0.92, rot: 7, z: 6 },
+      bag: { x: 84, y: 34, scale: 0.94, rot: 6, z: 6 },
+      accessory: { x: 20, y: 74, scale: 0.86, rot: -5, z: 7 },
     };
     const seen: Record<string, number> = {};
     garments.forEach((n, idx) => {

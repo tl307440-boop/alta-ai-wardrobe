@@ -96,7 +96,7 @@ export interface SemanticCutoutResult {
 
 export interface DiscoveredGarmentSpec {
   id: string;
-  category: 'outerwear' | 'top' | 'bottom' | 'shoes' | 'accessory';
+  category: 'outerwear' | 'top' | 'dress' | 'bottom' | 'shoes' | 'bag' | 'accessory';
   baseName: string;
   svgType: string;
   classes: number[];
@@ -109,7 +109,7 @@ export interface DiscoveredGarmentSpec {
 export interface DiscoveredGarmentResult {
   spec: DiscoveredGarmentSpec;
   name: string;
-  category: 'outerwear' | 'top' | 'bottom' | 'shoes' | 'accessory';
+  category: 'outerwear' | 'top' | 'dress' | 'bottom' | 'shoes' | 'bag' | 'accessory';
   color: string;
   colorHex: string;
   seasons: string[];
@@ -496,13 +496,14 @@ function candidateClassGroups(category: string, name = ''): number[][] {
       return [[SEG_LABELS.PANTS], [SEG_LABELS.SKIRT]];
     case 'shoes':
       return [[SEG_LABELS.LEFT_SHOE, SEG_LABELS.RIGHT_SHOE]];
+    case 'bag':
+      return [[SEG_LABELS.BAG]];
     case 'accessory':
       if (/帽/.test(n)) return [[SEG_LABELS.HAT]];
       if (/墨镜|太阳镜|眼镜/.test(n)) return [[SEG_LABELS.SUNGLASSES]];
       if (/腰带|皮带/.test(n)) return [[SEG_LABELS.BELT]];
       if (/围巾|丝巾|披肩/.test(n)) return [[SEG_LABELS.SCARF], [SEG_LABELS.UPPER_CLOTHES]];
-      if (/包|托特|腋下|斜挎|手提/.test(n)) return [[SEG_LABELS.BAG]];
-      return [[SEG_LABELS.BAG], [SEG_LABELS.SCARF], [SEG_LABELS.HAT], [SEG_LABELS.SUNGLASSES], [SEG_LABELS.BELT]];
+      return [[SEG_LABELS.SCARF], [SEG_LABELS.HAT], [SEG_LABELS.SUNGLASSES], [SEG_LABELS.BELT], [SEG_LABELS.BAG]];
     default:
       return [[SEG_LABELS.UPPER_CLOTHES], [SEG_LABELS.DRESS], [SEG_LABELS.PANTS], [SEG_LABELS.SKIRT]];
   }
@@ -716,7 +717,7 @@ export function planGarmentsFromSemanticMap(parsed: ParsedClothesMap): Discovere
 
   const candidates: Array<{
     id: string;
-    category: 'outerwear' | 'top' | 'bottom' | 'shoes' | 'accessory';
+    category: 'outerwear' | 'top' | 'dress' | 'bottom' | 'shoes' | 'bag' | 'accessory';
     baseName: string;
     svgType: string;
     classes: number[];
@@ -727,7 +728,7 @@ export function planGarmentsFromSemanticMap(parsed: ParsedClothesMap): Discovere
   }> = [
     {
       id: 'dress',
-      category: 'top',
+      category: 'dress',
       baseName: '连衣裙',
       svgType: 'skirt',
       classes: [SEG_LABELS.DRESS],
@@ -782,7 +783,7 @@ export function planGarmentsFromSemanticMap(parsed: ParsedClothesMap): Discovere
     },
     {
       id: 'bag',
-      category: 'accessory',
+      category: 'bag',
       baseName: '包袋',
       svgType: 'tote_bag',
       classes: [SEG_LABELS.BAG],

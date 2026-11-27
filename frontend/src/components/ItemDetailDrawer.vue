@@ -5,7 +5,7 @@ import { wardrobeApi, visionApi } from '@/api/modules';
 import { useWardrobeStore } from '@/stores/wardrobe';
 import { useLookbookStore } from '@/stores/lookbook';
 import { useToastStore } from '@/stores/toast';
-import { COLOR_SWATCHES } from '@/utils/constants';
+import { CATEGORY_OPTIONS, COLOR_SWATCHES } from '@/utils/constants';
 import type { HistoryRecord } from '@/types';
 import AppIcon from './AppIcon.vue';
 import GarmentVisual from './GarmentVisual.vue';
@@ -18,6 +18,8 @@ const toast = useToastStore();
 
 const form = reactive({
   name: '',
+  category: 'top',
+  subCategory: '',
   color: '',
   colorHex: '#F5F5F5',
   svgType: '',
@@ -71,6 +73,8 @@ watch(
       return;
     }
     form.name = item.name;
+    form.category = item.category || 'top';
+    form.subCategory = item.subCategory || '';
     form.color = item.color;
     form.colorHex = item.colorHex;
     form.svgType = item.svgType || 'tshirt';
@@ -124,6 +128,8 @@ async function saveChanges() {
     const parsedPrice = form.price !== '' && Number(form.price) >= 0 ? Number(form.price) : undefined;
     await wardrobeStore.updateItem(item.id, {
       name: form.name,
+      category: form.category,
+      subCategory: form.subCategory.trim() || undefined,
       color: form.color,
       colorHex: form.colorHex,
       price: parsedPrice,
@@ -285,6 +291,28 @@ function jumpToCalendar(date: string) {
                   class="w-full px-3 py-2 rounded-xl bg-[#F5F5F5] border border-transparent focus:border-black focus:bg-white font-mono text-[13.5px] font-medium outline-none transition"
                 />
               </div>
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-[12px] text-[#666666]">衣橱分类</label>
+              <div class="flex flex-wrap gap-1.5">
+                <button
+                  v-for="cat in CATEGORY_OPTIONS"
+                  :key="cat.key"
+                  type="button"
+                  @click="form.category = cat.key"
+                  class="px-3 py-1 rounded-full text-[12px] font-medium transition"
+                  :class="form.category === cat.key ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#333333] hover:bg-[#EBEBEB]'"
+                >
+                  {{ cat.label }}
+                </button>
+              </div>
+              <input
+                v-model="form.subCategory"
+                type="text"
+                placeholder="细分子类（如：链条包、过膝丝袜、吊带连衣裙）"
+                class="w-full px-3.5 py-2 rounded-xl bg-[#F5F5F5] border border-transparent focus:border-black focus:bg-white text-[12.5px] outline-none transition"
+              />
             </div>
 
             <div>

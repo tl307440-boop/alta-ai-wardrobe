@@ -35,6 +35,7 @@ public class OutfitContactSheetService {
             "bottom", "BOTTOM",
             "dress", "DRESS",
             "shoes", "SHOES",
+            "bag", "BAG",
             "accessory", "ACC"
     );
 
@@ -136,8 +137,10 @@ public class OutfitContactSheetService {
             g.setColor(Color.WHITE);
             g.drawString(badge, innerX + 15, innerY + 25);
 
-            // Category tag top-right
-            String catTag = CAT_LABELS.getOrDefault(item.getCategory(), "ITEM");
+            // Category tag top-right (flag one-piece dresses/JSKs/jumpsuits so VLM never pairs them with bottoms)
+            String catTag = OutfitRecommendationService.isOnePieceEntity(item)
+                    ? "ONE-PIECE"
+                    : CAT_LABELS.getOrDefault(item.getCategory(), "ITEM");
             g.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
             FontMetrics cfm = g.getFontMetrics();
             g.setColor(new Color(0x66, 0x66, 0x66));

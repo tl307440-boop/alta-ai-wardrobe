@@ -53,22 +53,24 @@ public class VisionRecognitionService {
             if (!json.path("isClothing").asBoolean(true)) {
                 throw new BusinessException(ErrorCode.NOT_CLOTHING);
             }
-            String category = wardrobeService.normalizeCategory(json.path("category").asText("top"));
             String name = json.path("name").asText("识别单品");
-            String color = json.path("color").asText("米白");
-            String colorHex = json.path("colorHex").asText(resolveColorHex(color));
-            List<String> seasons = wardrobeService.decodeSeasonsToCn(json.path("season").asText("spring,autumn"));
+            String subCategory = json.path("subCategory").asText(name);
             List<String> tags = new ArrayList<>();
             if (json.path("styleTags").isArray()) {
                 json.path("styleTags").forEach(n -> tags.add(n.asText()));
             }
             if (tags.isEmpty()) tags.add("极简通勤");
+            String category = wardrobeService.refineCategory(
+                    json.path("category").asText("top"), subCategory, name, String.join(" ", tags));
+            String color = json.path("color").asText("米白");
+            String colorHex = json.path("colorHex").asText(resolveColorHex(color));
+            List<String> seasons = wardrobeService.decodeSeasonsToCn(json.path("season").asText("spring,autumn"));
 
             return VisionDto.ItemRecognitionVo.builder()
                     .isClothing(true)
                     .name(name)
                     .category(category)
-                    .subCategory(json.path("subCategory").asText(name))
+                    .subCategory(subCategory)
                     .color(color)
                     .colorHex(colorHex)
                     .seasons(seasons)
@@ -171,8 +173,8 @@ public class VisionRecognitionService {
     }
 
     private VisionDto.DetectedItem toDetectedItem(JsonNode n, List<WardrobeItem> userWardrobe) {
-        String category = wardrobeService.normalizeCategory(n.path("category").asText("top"));
         String name = n.path("name").asText("识别单品");
+        String subCategory = n.path("subCategory").asText(name);
         String color = n.path("color").asText("米白");
         String colorHex = n.path("colorHex").asText(resolveColorHex(color));
         List<String> tags = new ArrayList<>();
@@ -183,6 +185,8 @@ public class VisionRecognitionService {
             });
         }
         if (tags.isEmpty()) tags.add("极简通勤");
+        String category = wardrobeService.refineCategory(
+                n.path("category").asText("top"), subCategory, name, String.join(" ", tags));
         String seasonRaw = n.path("season").isArray()
                 ? String.join(",", jsonUtils.toStringList(n.path("season").toString()))
                 : n.path("season").asText("spring,autumn");
@@ -453,18 +457,24 @@ public class VisionRecognitionService {
 
     private String guessCategoryFromFilename(String name) {
         if (name.contains("coat") || name.contains("jacket") || name.contains("blazer") || name.contains("trench") || name.contains("外套") || name.contains("风衣") || name.contains("开衫")) return "outerwear";
+        if (name.contains("dress") || name.contains("连衣裙") || name.contains("礼服")) return "dress";
         if (name.contains("pant") || name.contains("jean") || name.contains("skirt") || name.contains("裤") || name.contains("裙")) return "bottom";
         if (name.contains("shoe") || name.contains("sneaker") || name.contains("loafer") || name.contains("鞋")) return "shoes";
-        if (name.contains("bag") || name.contains("tote") || name.contains("包")) return "accessory";
+        if (name.contains("bag") || name.contains("tote") || name.contains("包")) return "bag";
+        if (name.contains("sock") || name.contains("stocking") || name.contains("丝袜") || name.contains("堆堆袜")
+                || name.contains("necklace") || name.contains("earring") || name.contains("hat") || name.contains("scarf")
+                || name.contains("项链") || name.contains("耳环") || name.contains("帽") || name.contains("围巾")) return "accessory";
         return "top";
     }
 
     private String guessNameFromFilename(String filename, String category) {
         return switch (category) {
             case "outerwear" -> "燕麦通勤外套（待复核）";
+            case "dress" -> "优雅质感连衣裙（待复核）";
             case "bottom" -> "高腰垂感长裤（待复核）";
             case "shoes" -> "极简百搭鞋履（待复核）";
-            case "accessory" -> "极简通勤手袋（待复核）";
+            case "bag" -> "极简通勤手袋（待复核）";
+            case "accessory" -> "质感时尚配饰（待复核）";
             default -> "简约百搭上衣（待复核）";
         };
     }
@@ -481,9 +491,11 @@ public class VisionRecognitionService {
         return switch (cat) {
             case "outerwear" -> "外套";
             case "top" -> "上衣";
+            case "dress" -> "连衣裙";
             case "bottom" -> "下装";
             case "shoes" -> "鞋履";
-            case "accessory" -> "包配";
+            case "bag" -> "包袋";
+            case "accessory" -> "配饰";
             default -> "单品";
         };
     }

@@ -1096,20 +1096,84 @@ class AiWardrobeIntegrationTest {
                 .andReturn();
         JsonNode items = objectMapper.readTree(
                 res.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
-        assertThat(items.size()).isGreaterThanOrEqualTo(46);
+        assertThat(items.size()).isGreaterThanOrEqualTo(74);
 
         Map<String, String> processedByName = new java.util.HashMap<>();
+        Map<String, String> categoryByName = new java.util.HashMap<>();
         for (JsonNode item : items) {
             processedByName.put(item.path("name").asText(), item.path("processedImageUrl").asText());
+            categoryByName.put(item.path("name").asText(), item.path("category").asText());
         }
         assertThat(processedByName.get("炭灰毛领修身短款辣妹夹克")).startsWith("/alta/pieces/demo-p");
         assertThat(processedByName.get("极简黑漆皮尖头细跟露跟高跟鞋")).startsWith("/alta/pieces/demo-p");
         assertThat(processedByName.get("灰调细条纹辣妹显瘦微喇长裤")).startsWith("/alta/pieces/demo-p");
+        assertThat(processedByName.get("柔粉漆皮双蝴蝶结厚底玛丽珍鞋")).isEqualTo("/alta/pieces/demo-p67-cutout.png");
+        assertThat(processedByName.get("暗黑哥特黑纱蕾丝荷叶边立领宫廷衬衫")).isEqualTo("/alta/pieces/demo-p70-cutout.png");
+        assertThat(processedByName.get("法式米白尖头珍珠绊带猫跟单鞋")).isEqualTo("/alta/pieces/demo-p72-cutout.png");
+        assertThat(processedByName.get("复古深咖双排扣英伦羊毛大衣")).isEqualTo("/alta/pieces/brown-wool-coat.webp");
+        assertThat(processedByName.get("极简全黑长款修身西装大衣")).isEqualTo("/alta/pieces/black-blazer.webp");
+        assertThat(processedByName.get("暗夜蕾丝花边超薄透肤黑丝袜")).isEqualTo("/alta/pieces/demo-p73-cutout.png");
+        assertThat(processedByName.get("法式蕾丝蝴蝶结吊带过膝黑丝袜")).isEqualTo("/alta/pieces/demo-p74-cutout.png");
+        assertThat(processedByName.get("日系收腰短袖海军领格纹结JK水手服上衣")).isEqualTo("/alta/pieces/demo-p76-cutout.png");
+        assertThat(processedByName.get("日系软糯纯白粗针织宽松堆堆袜")).isEqualTo("/alta/pieces/demo-p79-cutout.png");
+        assertThat(processedByName.get("纯欲辣妹黑色挂脖深V前扣露背短上衣")).isEqualTo("/alta/pieces/demo-p81-cutout.png");
+        assertThat(processedByName.get("极简全黑高腰辣妹包臀A字超短裙")).isEqualTo("/alta/pieces/black-mini-skirt.webp");
 
-        // Re-running backfill must remain completely idempotent (zero duplicate inserts)
+        // Verify Plan A 7-category taxonomy classification on demo_user
+        assertThat(categoryByName.get("黑金绳结扣小香风链条单肩包")).isEqualTo("bag");
+        assertThat(categoryByName.get("燕麦帆布拼皮托特包")).isEqualTo("bag");
+        assertThat(categoryByName.get("炭黑 包袋")).isEqualTo("bag");
+        assertThat(categoryByName.get("暗夜蕾丝花边超薄透肤黑丝袜")).isEqualTo("accessory");
+        assertThat(categoryByName.get("日系软糯纯白粗针织宽松堆堆袜")).isEqualTo("accessory");
+        assertThat(categoryByName.get("金属三角项链")).isEqualTo("accessory");
+        assertThat(categoryByName.get("暗黑哥特银黑提花束腰洛丽塔JSK")).isEqualTo("dress");
+        assertThat(categoryByName.get("草莓庄园蕾丝蝴蝶结甜美洛丽塔裙")).isEqualTo("dress");
+        assertThat(categoryByName.get("酒红深V铆钉挂脖褶皱露背超短连衣裙")).isEqualTo("dress");
+        assertThat(categoryByName.get("复古焦糖格纹高腰JK百褶超短裙")).isEqualTo("bottom");
+
+        // Re-running backfill + migrateLegacyCategories must remain idempotent and upgrade legacy rows
+        com.wardrobe.model.entity.WardrobeItem legacyBag = new com.wardrobe.model.entity.WardrobeItem();
+        legacyBag.setUserId(items.get(0).path("userId").asLong());
+        legacyBag.setName("旧版分类腋下斜挎包");
+        legacyBag.setCategory("accessory");
+        legacyBag.setColor("炭黑");
+        legacyBag.setColorHex("#1C1C1E");
+        legacyBag.setSeason("spring,autumn");
+        legacyBag.setThickness(1);
+        legacyBag.setSvgType("crossbody_bag");
+        legacyBag.setProcessedImageUrl("svg://crossbody_bag");
+        legacyBag.setSourceType("manual");
+        legacyBag.setWearCount(0);
+        legacyBag.setCreatedAt(java.time.LocalDateTime.now());
+        legacyBag.setUpdatedAt(java.time.LocalDateTime.now());
+        wardrobeItemMapper.insert(legacyBag);
+
+        com.wardrobe.model.entity.WardrobeItem legacyDress = new com.wardrobe.model.entity.WardrobeItem();
+        legacyDress.setUserId(items.get(0).path("userId").asLong());
+        legacyDress.setName("旧版分类法式碎花连衣裙");
+        legacyDress.setCategory("top");
+        legacyDress.setColor("米白");
+        legacyDress.setColorHex("#F3EDE2");
+        legacyDress.setSeason("spring,summer");
+        legacyDress.setThickness(1);
+        legacyDress.setSvgType("pleated_skirt");
+        legacyDress.setProcessedImageUrl("svg://skirt");
+        legacyDress.setSourceType("manual");
+        legacyDress.setWearCount(0);
+        legacyDress.setCreatedAt(java.time.LocalDateTime.now());
+        legacyDress.setUpdatedAt(java.time.LocalDateTime.now());
+        wardrobeItemMapper.insert(legacyDress);
+
+        seedDataInitializer.backfillDemoCuratedItems();
+        seedDataInitializer.migrateLegacyCategories();
+
+        assertThat(wardrobeItemMapper.selectById(legacyBag.getId()).getCategory()).isEqualTo("bag");
+        assertThat(wardrobeItemMapper.selectById(legacyDress.getId()).getCategory()).isEqualTo("dress");
+        wardrobeItemMapper.deleteById(legacyBag.getId());
+        wardrobeItemMapper.deleteById(legacyDress.getId());
+
         int countBefore = items.size();
         seedDataInitializer.backfillDemoCuratedItems();
-
         MvcResult resAfter = mockMvc.perform(get("/api/wardrobe/items")
                         .header("Authorization", "Bearer " + demoToken))
                 .andExpect(status().isOk())
@@ -1315,5 +1379,208 @@ class AiWardrobeIntegrationTest {
                 .runMultiImageTryOn(anyString(), anyString(), anyString(), anyList(), anyString());
         org.mockito.Mockito.verify(llmClient, org.mockito.Mockito.never())
                 .verifyTryOnQuality(any(), anyString(), anyList());
+    }
+
+    @Test
+    void testPlanItemRemoveAddOnePieceExclusivityAndStyleIntent() throws Exception {
+        String demoToken = loginAsDemo();
+
+        MvcResult itemsRes = mockMvc.perform(get("/api/wardrobe/items")
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode allItems = objectMapper.readTree(
+                itemsRes.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
+        Long gothicJskId = null;
+        Long extraShoeId = null;
+        for (JsonNode n : allItems) {
+            String nm = n.path("name").asText("");
+            if (nm.contains("暗黑哥特") && nm.contains("JSK")) {
+                gothicJskId = n.path("id").asLong();
+            }
+            if ("shoes".equals(n.path("category").asText("")) && extraShoeId == null) {
+                extraShoeId = n.path("id").asLong();
+            }
+        }
+        assertThat(gothicJskId).isNotNull();
+
+        // 1. Style intent "可爱萝莉": must pick sweet Lolita/fairy piece, never gothic JSK or hot-girl pinstripe pants,
+        // and must NEVER pair a one-piece dress/JSK with any bottom slot.
+        MvcResult lolitaRecRes = mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "nl_query",
+                                "userQuery", "可爱萝莉",
+                                "weatherTemp", 18,
+                                "weatherCondition", "晴"
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode lolitaPlan = objectMapper.readTree(
+                lolitaRecRes.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
+        long lolitaPlanId = lolitaPlan.path("id").asLong();
+        java.util.List<String> lolitaNames = new java.util.ArrayList<>();
+        java.util.List<String> lolitaCats = new java.util.ArrayList<>();
+        java.util.List<Long> lolitaItemIds = new java.util.ArrayList<>();
+        for (JsonNode slot : lolitaPlan.path("slots")) {
+            if (!slot.path("missing").asBoolean(false)) {
+                lolitaNames.add(slot.path("item").path("name").asText(""));
+                lolitaCats.add(slot.path("slotKey").asText(""));
+                lolitaItemIds.add(slot.path("item").path("id").asLong());
+            }
+        }
+        assertThat(String.join(" ", lolitaNames)).containsAnyOf("草莓庄园", "芭蕾千金");
+        assertThat(String.join(" ", lolitaNames)).doesNotContain("暗黑哥特");
+        assertThat(String.join(" ", lolitaNames)).doesNotContain("灰调细条纹");
+        assertThat(lolitaCats).contains("dress", "bag");
+        assertThat(lolitaCats).doesNotContain("top", "bottom");
+
+        // 2. Anchor gothic JSK directly: one-piece exclusivity must prevent any bottom or top from being selected
+        MvcResult jskRecRes = mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "anchor_item",
+                                "anchorItemId", gothicJskId,
+                                "weatherTemp", 18
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode jskPlan = objectMapper.readTree(
+                jskRecRes.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
+        java.util.List<String> jskCats = new java.util.ArrayList<>();
+        java.util.List<Long> jskIds = new java.util.ArrayList<>();
+        for (JsonNode slot : jskPlan.path("slots")) {
+            if (!slot.path("missing").asBoolean(false)) {
+                jskCats.add(slot.path("slotKey").asText(""));
+                jskIds.add(slot.path("item").path("id").asLong());
+            }
+        }
+        assertThat(jskIds).contains(gothicJskId);
+        assertThat(jskCats).contains("dress");
+        assertThat(jskCats).doesNotContain("top", "bottom");
+
+        // 3. Remove item -> Add item -> Collage sync -> Min 1 item guard -> 40301 IDOR check
+        assertThat(lolitaItemIds.size()).isGreaterThanOrEqualTo(2);
+        Long removedId = lolitaItemIds.get(lolitaItemIds.size() - 1);
+
+        mockMvc.perform(delete("/api/outfit/plans/" + lolitaPlanId + "/items/" + removedId)
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.slots[?(@.item.id==" + removedId + ")]").isEmpty());
+
+        mockMvc.perform(post("/api/outfit/plans/" + lolitaPlanId + "/items")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("itemId", removedId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.slots[?(@.item.id==" + removedId + ")]").isNotEmpty());
+
+        // Collage layout sync: keep only first two owned items
+        Long keepA = lolitaItemIds.get(0);
+        Long keepB = removedId;
+        mockMvc.perform(put("/api/outfit/plans/" + lolitaPlanId + "/collage-layout")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "nodes", List.of(
+                                        Map.of("nodeKey", "k-a", "slotKey", "top", "itemId", keepA, "x", 45, "y", 35, "scale", 1.0, "rotation", 0, "zIndex", 1),
+                                        Map.of("nodeKey", "k-b", "slotKey", "shoes", "itemId", keepB, "x", 60, "y", 75, "scale", 0.9, "rotation", 0, "zIndex", 2)
+                                )
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.slots.length()").value(2));
+
+        // Remove down to 1 item succeeds, removing last 1 item blocked with 40001
+        mockMvc.perform(delete("/api/outfit/plans/" + lolitaPlanId + "/items/" + keepB)
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.slots.length()").value(1));
+
+        mockMvc.perform(delete("/api/outfit/plans/" + lolitaPlanId + "/items/" + keepA)
+                        .header("Authorization", "Bearer " + demoToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40001));
+
+        // Cross-user IDOR attempt returns 40301
+        String otherUsername = "batch2_idor_" + System.currentTimeMillis();
+        MvcResult otherReg = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", otherUsername,
+                                "password", "TestPass123!",
+                                "nickname", "IDORChecker",
+                                "loadStarterPack", false
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        String otherToken = objectMapper.readTree(otherReg.getResponse().getContentAsString())
+                .path("data").path("token").asText();
+
+        mockMvc.perform(delete("/api/outfit/plans/" + lolitaPlanId + "/items/" + keepA)
+                        .header("Authorization", "Bearer " + otherToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(40301));
+
+        if (extraShoeId != null) {
+            mockMvc.perform(post("/api/outfit/plans/" + lolitaPlanId + "/items")
+                            .header("Authorization", "Bearer " + otherToken)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of("itemId", extraShoeId))))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value(40301));
+        }
+
+        // 4. JK + Stockings + Leg Warmers + Sexy hot-girl intent verification: BOTH bag and accessory must appear
+        MvcResult jkRecRes = mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "nl_query",
+                                "userQuery", "JK制服配黑丝或堆堆袜，纯欲性感辣妹风",
+                                "weatherTemp", 20,
+                                "weatherCondition", "晴"
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode jkPlan = objectMapper.readTree(
+                jkRecRes.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
+        java.util.List<String> jkNames = new java.util.ArrayList<>();
+        java.util.List<String> jkCats = new java.util.ArrayList<>();
+        for (JsonNode slot : jkPlan.path("slots")) {
+            if (!slot.path("missing").asBoolean(false)) {
+                jkNames.add(slot.path("item").path("name").asText(""));
+                jkCats.add(slot.path("slotKey").asText(""));
+            }
+        }
+        assertThat(jkNames).isNotEmpty();
+        assertThat(String.join(" ", jkNames)).containsAnyOf("JK", "水手服", "黑丝", "堆堆袜", "挂脖", "超短裙", "渔网");
+        assertThat(jkCats).contains("bag", "accessory");
+
+        // 5. Interview / commute intent: must pick bag and NEVER include stockings/fishnets/leg-warmers
+        MvcResult officeRecRes = mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + demoToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "nl_query",
+                                "userQuery", "明天去互联网公司面试，想要干练精神",
+                                "weatherTemp", 18,
+                                "weatherCondition", "多云"
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode officePlan = objectMapper.readTree(
+                officeRecRes.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
+        java.util.List<String> officeNames = new java.util.ArrayList<>();
+        java.util.List<String> officeCats = new java.util.ArrayList<>();
+        for (JsonNode slot : officePlan.path("slots")) {
+            if (!slot.path("missing").asBoolean(false)) {
+                officeNames.add(slot.path("item").path("name").asText(""));
+                officeCats.add(slot.path("slotKey").asText(""));
+            }
+        }
+        assertThat(officeCats).contains("bag");
+        assertThat(String.join(" ", officeNames)).doesNotContain("丝袜", "渔网", "堆堆袜");
     }
 }

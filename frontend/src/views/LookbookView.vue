@@ -5,6 +5,7 @@ import { useWardrobeStore } from '@/stores/wardrobe';
 import { useLookbookStore } from '@/stores/lookbook';
 import { useToastStore } from '@/stores/toast';
 import {
+  CATEGORY_OPTIONS,
   QUICK_SCENARIOS,
   REFINE_CHIPS,
   WEATHER_PRESETS,
@@ -50,6 +51,11 @@ const togglingReviveIdle = ref(false);
 const activeScenarioLabel = ref<string | null>(null);
 const activeTriggerBusy = ref<'weather' | 'nl' | 'anchor' | null>(null);
 const weatherBusyKey = ref<string | null>(null);
+const removingItemId = ref<number | null>(null);
+const addItemModalOpen = ref(false);
+const addItemCategory = ref('all');
+const addItemQuery = ref('');
+const addingItemId = ref<number | null>(null);
 
 function syncLookbookUrl(mode: 'grid' | 'collage' | 'tryon', planId?: number | null) {
   try {
@@ -113,6 +119,26 @@ const anchorItem = computed(
 
 const allSlots = computed(() => lookbookStore.currentPlan?.slots || []);
 const missingSlot = computed(() => allSlots.value.find((s) => s.missing) || null);
+const ownedSlotCount = computed(
+  () => allSlots.value.filter((s) => !s.missing && s.item?.id > 0).length
+);
+const planItemIdSet = computed(
+  () => new Set(allSlots.value.filter((s) => !s.missing && s.item?.id > 0).map((s) => s.item.id))
+);
+const pickerWardrobeItems = computed(() => {
+  const kw = addItemQuery.value.trim().toLowerCase();
+  return wardrobeStore.items.filter((item) => {
+    if (addItemCategory.value !== 'all' && item.category !== addItemCategory.value) {
+      return false;
+    }
+    if (!kw) return true;
+    const hay = [item.name, item.color, item.subCategory, ...(item.styleTags || [])]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(kw);
+  });
+});
 
 const filteredProducts = computed(() => {
   const cap = Number(lookbookStore.budget) || 300;
@@ -251,6 +277,43 @@ async function handleSwapSlot(slotKey: string, currentItemId: number) {
     toast.show(e?.message || '暂无更多同品类单品可替换');
   } finally {
     swappingSlotKey.value = null;
+  }
+}
+
+async function handleRemoveSlot(itemId: number, itemName?: string) {
+  if (!itemId || itemId <= 0 || removingItemId.value !== null || lookbookStore.loading) return;
+  if (ownedSlotCount.value <= 1) {
+    toast.show('搭配至少需保留 1 件衣橱单品');
+    return;
+  }
+  removingItemId.value = itemId;
+  try {
+    await lookbookStore.removePlanItem(itemId);
+    toast.show(itemName ? `已从本套移除「${itemName}」` : '已从本套移除该单品');
+  } catch (e: any) {
+    toast.show(e?.message || '移除单品失败');
+  } finally {
+    removingItemId.value = null;
+  }
+}
+
+function openAddItemModal() {
+  addItemCategory.value = 'all';
+  addItemQuery.value = '';
+  addItemModalOpen.value = true;
+}
+
+async function handleAddPlanItem(itemId: number, itemName: string) {
+  if (!itemId || addingItemId.value !== null || lookbookStore.loading) return;
+  addingItemId.value = itemId;
+  try {
+    await lookbookStore.addPlanItem(itemId);
+    toast.show(`已加入「${itemName}」`);
+    addItemModalOpen.value = false;
+  } catch (e: any) {
+    toast.show(e?.message || '添加单品失败');
+  } finally {
+    addingItemId.value = null;
   }
 }
 
@@ -638,6 +701,8 @@ async function handleRecordToday() {
             :saving="savingLayout"
             @save-layout="handleSaveCollageLayout"
             @swap-slot="handleSwapSlot"
+            @remove-slot="handleRemoveSlot"
+            @open-add-item="openAddItemModal"
           />
 
           <template v-else-if="canvasMode === 'grid'">
@@ -688,6 +753,15 @@ async function handleRecordToday() {
                       class="w-7 h-7 rounded-full bg-white hover:bg-black hover:text-white text-[#333333] flex items-center justify-center transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <AppIcon name="refresh" :size="12" :class="swappingSlotKey === slot.slotKey ? 'animate-spin' : ''" />
+                    </button>
+                    <button
+                      type="button"
+                      @click="handleRemoveSlot(slot.item.id, slot.item.name)"
+                      :disabled="ownedSlotCount <= 1 || removingItemId !== null || lookbookStore.loading"
+                      title="从本套移除"
+                      class="w-7 h-7 rounded-full bg-white hover:bg-red-500 hover:text-white text-[#666666] flex items-center justify-center transition shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <AppIcon name="trash" :size="11" />
                     </button>
                   </div>
                 </div>
@@ -825,37 +899,57 @@ async function handleRecordToday() {
               >
                 看同款
               </button>
-              <button
-                v-else-if="slot.anchor"
-                type="button"
-                @click.stop="handleToggleSlotLock(slot.item)"
-                title="点击取消锁定，取消后可换一件"
-                class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-black hover:bg-[#262626] text-white text-[11px] font-medium transition"
-              >
-                <AppIcon name="pin" :size="10" />
-                已锁定 ×
-              </button>
               <div v-else class="shrink-0 flex items-center gap-1">
                 <button
+                  v-if="slot.anchor"
                   type="button"
                   @click.stop="handleToggleSlotLock(slot.item)"
-                  title="锁定此单品，微调时保留"
-                  class="w-7 h-7 rounded-full bg-white hover:bg-black hover:text-white border border-black/[0.1] text-[#666666] flex items-center justify-center transition"
+                  title="点击取消锁定，取消后可换一件"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-black hover:bg-[#262626] text-white text-[11px] font-medium transition"
                 >
-                  <AppIcon name="pin" :size="11" />
+                  <AppIcon name="pin" :size="10" />
+                  已锁定 ×
                 </button>
+                <template v-else>
+                  <button
+                    type="button"
+                    @click.stop="handleToggleSlotLock(slot.item)"
+                    title="锁定此单品，微调时保留"
+                    class="w-7 h-7 rounded-full bg-white hover:bg-black hover:text-white border border-black/[0.1] text-[#666666] flex items-center justify-center transition"
+                  >
+                    <AppIcon name="pin" :size="11" />
+                  </button>
+                  <button
+                    type="button"
+                    @click.stop="handleSwapSlot(slot.slotKey, slot.item.id)"
+                    :disabled="swappingSlotKey !== null || lookbookStore.loading"
+                    title="换一件同品类"
+                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white hover:bg-black hover:text-white border border-black/[0.1] text-[11px] text-black transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <AppIcon name="refresh" :size="11" :class="swappingSlotKey === slot.slotKey ? 'animate-spin' : ''" />
+                    {{ swappingSlotKey === slot.slotKey ? '替换中…' : '换一件' }}
+                  </button>
+                </template>
                 <button
                   type="button"
-                  @click.stop="handleSwapSlot(slot.slotKey, slot.item.id)"
-                  :disabled="swappingSlotKey !== null || lookbookStore.loading"
-                  title="换一件同品类"
-                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white hover:bg-black hover:text-white border border-black/[0.1] text-[11px] text-black transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  @click.stop="handleRemoveSlot(slot.item.id, slot.item.name)"
+                  :disabled="ownedSlotCount <= 1 || removingItemId !== null || lookbookStore.loading"
+                  title="从本套移除"
+                  class="w-7 h-7 rounded-full bg-white hover:bg-red-500 hover:text-white border border-black/[0.1] text-[#666666] flex items-center justify-center transition disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <AppIcon name="refresh" :size="11" :class="swappingSlotKey === slot.slotKey ? 'animate-spin' : ''" />
-                  {{ swappingSlotKey === slot.slotKey ? '替换中…' : '换一件' }}
+                  <AppIcon name="trash" :size="11" />
                 </button>
               </div>
             </div>
+
+            <button
+              type="button"
+              @click="openAddItemModal"
+              class="w-full py-2.5 rounded-2xl border border-dashed border-black/20 hover:border-black hover:bg-[#FAFAFA] text-[12px] font-medium text-black transition inline-flex items-center justify-center gap-1.5"
+            >
+              <AppIcon name="plus" :size="13" />
+              从衣橱添加单品自由混搭
+            </button>
           </div>
 
           <!-- Tab 2: Missing Item Commerce Dupes -->
@@ -960,6 +1054,99 @@ async function handleRecordToday() {
                 {{ lookbookStore.loading || activeRefineCmd !== null ? '微调中…' : '微调' }}
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Wardrobe Item Picker Modal -->
+    <div
+      v-if="addItemModalOpen"
+      @click="addItemModalOpen = false"
+      class="fixed inset-0 z-[80] bg-black/45 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
+    >
+      <div
+        @click.stop
+        class="w-full sm:max-w-[540px] max-h-[82vh] bg-white rounded-t-3xl sm:rounded-3xl border border-black/[0.08] shadow-2xl flex flex-col overflow-hidden"
+      >
+        <div class="px-5 py-4 border-b border-black/[0.06] flex items-center justify-between gap-3">
+          <div>
+            <h3 class="text-[15px] font-semibold text-black">从衣橱添加单品</h3>
+            <p class="text-[11.5px] text-[#666666] mt-0.5">挑选任意单品加入当前搭配画板与 AI 试穿序列</p>
+          </div>
+          <button
+            type="button"
+            @click="addItemModalOpen = false"
+            class="w-8 h-8 rounded-full bg-[#F5F5F5] hover:bg-black hover:text-white text-black flex items-center justify-center transition"
+          >
+            <AppIcon name="x" :size="15" />
+          </button>
+        </div>
+
+        <div class="px-5 pt-3 pb-2.5 border-b border-black/[0.05] space-y-2.5">
+          <div class="relative">
+            <AppIcon name="search" :size="14" class="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#888888]" />
+            <input
+              v-model="addItemQuery"
+              type="text"
+              placeholder="搜索单品名称、颜色或风格标签…"
+              class="w-full pl-9 pr-3.5 py-2 rounded-full bg-[#F5F5F5] border border-transparent focus:bg-white focus:border-black outline-none text-[12.5px]"
+            />
+          </div>
+          <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+            <button
+              v-for="cat in [{ key: 'all', label: '全部' }, ...CATEGORY_OPTIONS]"
+              :key="cat.key"
+              type="button"
+              @click="addItemCategory = cat.key"
+              class="px-3 py-1 rounded-full text-[11.5px] font-medium shrink-0 transition"
+              :class="addItemCategory === cat.key ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#555555] hover:text-black'"
+            >
+              {{ cat.label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 space-y-2">
+          <div v-if="pickerWardrobeItems.length === 0" class="py-10 text-center text-[12.5px] text-[#777777]">
+            没有找到匹配的衣橱单品
+          </div>
+          <div
+            v-for="item in pickerWardrobeItems"
+            :key="item.id"
+            class="flex items-center justify-between gap-3 p-2.5 rounded-2xl bg-[#FAFAFA] hover:bg-[#F3F3F3] border border-black/[0.05] transition"
+          >
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-12 h-12 rounded-xl bg-white border border-black/[0.06] p-1 shrink-0">
+                <GarmentVisual
+                  :image-url="item.processedImageUrl"
+                  :svg-type="item.svgType"
+                  :color-hex="item.colorHex"
+                  :alt="item.name"
+                />
+              </div>
+              <div class="min-w-0">
+                <div class="text-[13px] font-medium text-black truncate">{{ item.name }}</div>
+                <div class="text-[11px] text-[#666666] truncate">
+                  {{ categoryLabel(item.category) }} · {{ item.color }}
+                </div>
+              </div>
+            </div>
+            <span
+              v-if="planItemIdSet.has(item.id)"
+              class="shrink-0 px-3 py-1 rounded-full bg-[#EDEDED] text-[#666666] text-[11px] font-medium"
+            >
+              已在套内
+            </span>
+            <button
+              v-else
+              type="button"
+              @click="handleAddPlanItem(item.id, item.name)"
+              :disabled="addingItemId !== null"
+              class="shrink-0 px-3.5 py-1.5 rounded-full bg-black hover:bg-[#262626] text-white text-[11.5px] font-medium transition disabled:opacity-50"
+            >
+              {{ addingItemId === item.id ? '加入中…' : '+ 加入' }}
+            </button>
           </div>
         </div>
       </div>

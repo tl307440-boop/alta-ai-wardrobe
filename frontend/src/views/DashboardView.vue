@@ -129,9 +129,11 @@ const heroCollagePieces = computed<HeroCollagePiece[]>(() => {
   const categoryPresets: Record<string, { x: number; y: number; scale: number; rotation: number; zIndex: number }> = {
     outerwear: { x: 26, y: 40, scale: 1.06, rotation: -4, zIndex: 4 },
     top: { x: 52, y: 31, scale: 0.94, rotation: 2, zIndex: 2 },
+    dress: { x: 48, y: 46, scale: 1.12, rotation: -1, zIndex: 3 },
     bottom: { x: 47, y: 68, scale: 1.04, rotation: -1, zIndex: 3 },
     shoes: { x: 75, y: 74, scale: 0.84, rotation: 5, zIndex: 5 },
-    accessory: { x: 78, y: 40, scale: 0.80, rotation: 6, zIndex: 6 },
+    bag: { x: 78, y: 36, scale: 0.82, rotation: 5, zIndex: 6 },
+    accessory: { x: 22, y: 74, scale: 0.76, rotation: -4, zIndex: 7 },
   };
 
   const saved: CollageNode[] = (plan.value?.collageLayout || []).filter((n) => !n.labelText);
