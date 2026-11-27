@@ -32,8 +32,21 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     hasApiKey: false,
     apiKeyMasked: '',
     visionModel: 'qwen-vl-max',
+    visionBaseUrl: '',
+    hasVisionApiKey: false,
+    visionApiKeyMasked: '',
+    visionKeyReusesMain: false,
+    visionKeyReusesImage: false,
+    visionReady: false,
     chatModel: 'qwen-plus',
     imageModel: 'gpt-image-1',
+    imageBaseUrl: '',
+    hasImageApiKey: false,
+    imageApiKeyMasked: '',
+    imageKeyReusesMain: false,
+    imageKeyReusesVision: false,
+    imageReady: false,
+    imageUnsupportedOnMain: false,
     modelReferenceUrl: null,
     enabled: true,
     serverDefaultAvailable: false,
@@ -155,8 +168,14 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     apiKey?: string;
     clearApiKey?: boolean;
     visionModel: string;
+    visionBaseUrl?: string;
+    visionApiKey?: string;
+    clearVisionApiKey?: boolean;
     chatModel: string;
     imageModel?: string;
+    imageBaseUrl?: string;
+    imageApiKey?: string;
+    clearImageApiKey?: boolean;
     enabled: boolean;
     vtonEnabled?: boolean;
     vtonProvider?: string;

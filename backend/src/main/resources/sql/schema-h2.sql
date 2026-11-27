@@ -129,8 +129,14 @@ CREATE TABLE IF NOT EXISTS `user_ai_config` (
   `api_key_encrypted` TEXT DEFAULT NULL,
   `api_key_masked` VARCHAR(100) DEFAULT NULL,
   `vision_model` VARCHAR(100) NOT NULL DEFAULT 'qwen-vl-max',
+  `vision_base_url` VARCHAR(500) DEFAULT NULL,
+  `vision_api_key_encrypted` TEXT DEFAULT NULL,
+  `vision_api_key_masked` VARCHAR(100) DEFAULT NULL,
   `chat_model` VARCHAR(100) NOT NULL DEFAULT 'qwen-plus',
   `image_model` VARCHAR(100) DEFAULT 'gpt-image-1',
+  `image_base_url` VARCHAR(500) DEFAULT NULL,
+  `image_api_key_encrypted` TEXT DEFAULT NULL,
+  `image_api_key_masked` VARCHAR(100) DEFAULT NULL,
   `model_reference_url` VARCHAR(500) DEFAULT NULL,
   `vton_enabled` TINYINT NOT NULL DEFAULT 0,
   `vton_provider` VARCHAR(50) DEFAULT 'dashscope',
@@ -201,3 +207,9 @@ ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_api_key_masked` VARC
 ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_public_base_url` VARCHAR(500) DEFAULT NULL;
 ALTER TABLE `user_preference` ADD COLUMN IF NOT EXISTS `learned_color_scores` TEXT DEFAULT NULL;
 ALTER TABLE `user_preference` ADD COLUMN IF NOT EXISTS `learned_pair_scores` TEXT DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vision_base_url` VARCHAR(500) DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vision_api_key_encrypted` TEXT DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vision_api_key_masked` VARCHAR(100) DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `image_base_url` VARCHAR(500) DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `image_api_key_encrypted` TEXT DEFAULT NULL;
+ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `image_api_key_masked` VARCHAR(100) DEFAULT NULL;

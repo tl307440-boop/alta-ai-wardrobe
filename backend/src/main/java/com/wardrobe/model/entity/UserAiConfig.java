@@ -22,8 +22,20 @@ public class UserAiConfig {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String apiKeyMasked;
     private String visionModel;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String visionBaseUrl;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String visionApiKeyEncrypted;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String visionApiKeyMasked;
     private String chatModel;
     private String imageModel;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String imageBaseUrl;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String imageApiKeyEncrypted;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String imageApiKeyMasked;
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String modelReferenceUrl;
     private Integer vtonEnabled;

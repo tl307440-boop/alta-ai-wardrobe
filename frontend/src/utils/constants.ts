@@ -223,9 +223,9 @@ export const AI_PROVIDER_PRESETS = [
   },
   {
     id: 'deepseek',
-    label: 'DeepSeek',
+    label: 'DeepSeek 官方',
     baseUrl: 'https://api.deepseek.com/v1',
-    visionModel: 'deepseek-chat',
+    visionModel: 'deepseek-flash',
     chatModel: 'deepseek-chat',
     imageModel: 'gpt-image-1',
   },

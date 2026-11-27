@@ -59,9 +59,11 @@ watch(
   { immediate: true }
 );
 
-const aiConfigActive = computed(
-  () => wardrobeStore.aiConfig.hasApiKey && wardrobeStore.aiConfig.enabled
-);
+const aiConfigActive = computed(() => {
+  const cfg = wardrobeStore.aiConfig;
+  const vtonOk = Boolean(cfg.vtonEnabled && (cfg.hasVtonApiKey || cfg.vtonKeyReusesMain));
+  return Boolean((cfg.enabled && (cfg.hasApiKey || cfg.visionReady || cfg.imageReady)) || vtonOk);
+});
 
 /* ---------- Stats ---------- */
 const categoryStats = computed(() =>

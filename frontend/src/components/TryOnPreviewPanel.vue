@@ -102,7 +102,14 @@ const activePreviewUrl = computed(() => {
 });
 
 const modelRefUrl = computed(() => wardrobeStore.aiConfig.modelReferenceUrl || '');
-const hasImageApiReady = computed(() => wardrobeStore.aiConfig.hasApiKey && wardrobeStore.aiConfig.enabled);
+const hasImageApiReady = computed(() =>
+  Boolean(
+    wardrobeStore.aiConfig.imageReady ??
+      (wardrobeStore.aiConfig.enabled &&
+        !wardrobeStore.aiConfig.imageUnsupportedOnMain &&
+        (wardrobeStore.aiConfig.hasImageApiKey || wardrobeStore.aiConfig.hasApiKey))
+  )
+);
 const ACTIVE_VTON_MODELS = ['qwen-image-2.1-pro', 'qwen-image-2.1-turbo', 'qwen-image-3.0-pro', 'wan2.7-image-pro'] as const;
 const displayVtonModel = computed(() => {
   const raw = (wardrobeStore.aiConfig.vtonModel || '').trim().toLowerCase();
@@ -339,7 +346,9 @@ function downloadPreview() {
                 ? `百炼多图试穿已激活 · ${displayVtonModel}`
                 : hasImageApiReady
                   ? `通用生图已激活 · ${wardrobeStore.aiConfig.imageModel || 'gpt-image-1'}`
-                  : '演示降级模式（未配置生图 Key）'
+                  : wardrobeStore.aiConfig.imageUnsupportedOnMain
+                    ? '主站不支持生图 · 请配独立生图通道或百炼 VTON'
+                    : '演示降级模式（未配置生图 Key）'
             }}
           </span>
           <span class="px-2 py-0.5 rounded-full bg-[#F5F5F5] text-[#666666] text-[10.5px]">

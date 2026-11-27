@@ -266,7 +266,7 @@ public class OutfitRecommendationService {
         StylistOutput output = null;
         boolean usedRealLlm = false;
 
-        if (creds.active() && !wardrobe.isEmpty()) {
+        if ((creds.active() || creds.visionActive()) && !wardrobe.isEmpty()) {
             try {
                 output = callLlmStylist(userId, creds, scored, weather, scene, req, anchor, basePlan, pref, budget);
                 usedRealLlm = (output != null);
@@ -642,7 +642,8 @@ public class OutfitRecommendationService {
         // Prefer VLM Visual Contact Sheet curation; gracefully degrade to text chatModel if vision fails
         JsonNode json = null;
         boolean usedVisualReview = false;
-        if (sheet != null && sheet.dataUri() != null && creds.visionModel() != null && !creds.visionModel().isBlank()) {
+        if (creds.visionActive() && sheet != null && sheet.dataUri() != null
+                && creds.visionModel() != null && !creds.visionModel().isBlank()) {
             try {
                 json = llmClient.curateOutfitPlanWithContactSheet(creds, prompt.toString(), sheet.dataUri());
                 if (json != null && json.path("selectedItemIds").isArray() && !json.path("selectedItemIds").isEmpty()) {
@@ -655,6 +656,9 @@ public class OutfitRecommendationService {
             }
         }
         if (json == null) {
+            if (!creds.active()) {
+                return null;
+            }
             json = llmClient.curateOutfitPlan(creds, prompt.toString());
         }
 
@@ -1201,7 +1205,7 @@ public class OutfitRecommendationService {
                 .collect(Collectors.toList());
 
         AiConfigService.ResolvedAiCredentials creds = aiConfigService.resolveForUser(userId);
-        if (creds.active() && creds.visionModel() != null && !creds.visionModel().isBlank()) {
+        if (creds.visionActive() && creds.visionModel() != null && !creds.visionModel().isBlank()) {
             try {
                 StringBuilder prompt = new StringBuilder();
                 prompt.append("图片类型：").append("ootd_photo".equalsIgnoreCase(source)
@@ -1592,7 +1596,7 @@ public class OutfitRecommendationService {
         boolean usedVlmVisualExtraction = false;
         String vlmOverallPalette = null;
         Map<String, JsonNode> extractedBySlot = new LinkedHashMap<>();
-        if (creds.active() && !garmentImagesBySlot.isEmpty()) {
+        if (creds.visionActive() && !garmentImagesBySlot.isEmpty()) {
             try {
                 StringBuilder metaBuilder = new StringBuilder();
                 List<String> dataUris = new ArrayList<>();
@@ -1838,7 +1842,7 @@ public class OutfitRecommendationService {
 
                     QualityEvaluation qcEval = QualityEvaluation.skipped();
                     int retryCount = 0;
-                    if (wantQc && creds.active() && creds.visionModel() != null && !creds.visionModel().isBlank()) {
+                    if (wantQc && creds.visionActive() && creds.visionModel() != null && !creds.visionModel().isBlank()) {
                         List<String> refUris = garmentInputs.stream()
                                 .map(DashScopeVtonClient.GarmentImageInput::imageDataOrUrl)
                                 .limit(3)
@@ -1945,7 +1949,7 @@ public class OutfitRecommendationService {
         }
 
         boolean wantQcGeneral = req == null || !Boolean.FALSE.equals(req.getEnableQualityCheck());
-        if (creds.active()) {
+        if (creds.imageActive()) {
             try {
                 String activePrompt = prompt.toString();
                 MultimodalLlmClient.GeneratedImageResult gen = llmClient.generateEditorialTryOn(
@@ -1954,6 +1958,7 @@ public class OutfitRecommendationService {
                 QualityEvaluation qcEval = QualityEvaluation.skipped();
                 int retryCount = 0;
                 if (wantQcGeneral && gen.imageBytes() != null && gen.imageBytes().length > 100
+                        && creds.visionActive()
                         && creds.visionModel() != null && !creds.visionModel().isBlank()) {
                     String personUri = usedRefPhoto && !refInputs.isEmpty()
                             ? llmClient.toCompactVisionDataUri(refInputs.get(0).filename(), refInputs.get(0).mimeType(), refInputs.get(0).bytes())
@@ -2110,7 +2115,9 @@ public class OutfitRecommendationService {
                 .sceneLabel(sceneLabelZh)
                 .pieces(pieceFeatures)
                 .build();
-        String offlineNotice = "尚未配置支持生图的中转站 API Key，当前展示匹配本套色系与风格的杂志示意样片；前往「我的 → AI 配置」填好 Key 即可实时激活 VLM 视觉反推与真机生图";
+        String offlineNotice = creds.active()
+                ? "当前主站端点不支持通用生图接口或未单独配置生图通道，已展示匹配该色系的杂志示意样片；前往「我的 → 偏好与设置」填写独立通用生图通道（中转站 Base URL & Key）或开启阿里云百炼 VTON 即可真机生图"
+                : "尚未配置支持生图的中转站 API Key，当前展示匹配本套色系与风格的杂志示意样片；前往「我的 → 偏好与设置」填好 Key 即可实时激活 VLM 视觉反推与真机生图";
         if (vtonFallbackReason != null && !vtonFallbackReason.isBlank()) {
             offlineNotice = vtonFallbackReason + "；" + offlineNotice;
         }
@@ -2145,7 +2152,7 @@ public class OutfitRecommendationService {
                                                   List<String> garmentDataUris,
                                                   List<String> garmentNames,
                                                   byte[] generatedBytes) {
-        if (creds == null || !creds.active()
+        if (creds == null || !creds.visionActive()
                 || creds.visionModel() == null || creds.visionModel().isBlank()
                 || generatedBytes == null || generatedBytes.length < 64) {
             return QualityEvaluation.skipped();

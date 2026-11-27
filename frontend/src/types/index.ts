@@ -123,8 +123,21 @@ export interface AiModelConfig {
   hasApiKey: boolean;
   apiKeyMasked: string;
   visionModel: string;
+  visionBaseUrl?: string;
+  hasVisionApiKey?: boolean;
+  visionApiKeyMasked?: string;
+  visionKeyReusesMain?: boolean;
+  visionKeyReusesImage?: boolean;
+  visionReady?: boolean;
   chatModel: string;
   imageModel?: string;
+  imageBaseUrl?: string;
+  hasImageApiKey?: boolean;
+  imageApiKeyMasked?: string;
+  imageKeyReusesMain?: boolean;
+  imageKeyReusesVision?: boolean;
+  imageReady?: boolean;
+  imageUnsupportedOnMain?: boolean;
   modelReferenceUrl?: string | null;
   enabled: boolean;
   serverDefaultAvailable: boolean;
@@ -138,11 +151,23 @@ export interface AiModelConfig {
   updatedAt?: string;
 }
 
+export interface AiChannelTestResult {
+  channel: string;
+  label: string;
+  endpoint: string;
+  model: string;
+  success: boolean;
+  skipped: boolean;
+  latencyMs: number;
+  message: string;
+}
+
 export interface AiTestResult {
   success: boolean;
   latencyMs: number;
   modelReply?: string;
   message: string;
+  channels?: AiChannelTestResult[];
 }
 
 export interface WeatherInfo {

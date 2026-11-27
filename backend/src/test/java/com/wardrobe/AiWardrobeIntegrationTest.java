@@ -1583,4 +1583,153 @@ class AiWardrobeIntegrationTest {
         assertThat(officeCats).contains("bag");
         assertThat(String.join(" ", officeNames)).doesNotContain("丝袜", "渔网", "堆堆袜");
     }
+
+    @Test
+    void testDecoupledAiConfigIsolationPreservationAndSameHostReuse() throws Exception {
+        String uname = "cfg_iso_" + System.currentTimeMillis();
+        MvcResult regRes = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", uname,
+                                "nickname", "隔离测试",
+                                "password", "Pass123456!",
+                                "defaultCity", "武汉",
+                                "loadStarterPack", false
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode regData = objectMapper.readTree(regRes.getResponse().getContentAsString()).path("data");
+        String token = regData.path("token").asText();
+        long userId = regData.path("userInfo").path("id").asLong();
+
+        // 1. DeepSeek main preset with no independent image relay -> imageUnsupportedOnMain=true, imageActive=false
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "deepseek",
+                                "baseUrl", "https://api.deepseek.com/v1",
+                                "apiKey", "sk-ds-main-0001",
+                                "visionModel", "deepseek-flash",
+                                "chatModel", "deepseek-chat",
+                                "imageModel", "gpt-image-1",
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.visionReady").value(true))
+                .andExpect(jsonPath("$.data.imageUnsupportedOnMain").value(true))
+                .andExpect(jsonPath("$.data.imageReady").value(false));
+        assertThat(aiConfigService.resolveForUser(userId).imageActive()).isFalse();
+
+        // 2. Providing custom imageBaseUrl WITHOUT imageApiKey MUST NEVER leak DeepSeek main key
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "deepseek",
+                                "baseUrl", "https://api.deepseek.com/v1",
+                                "visionModel", "deepseek-flash",
+                                "chatModel", "deepseek-chat",
+                                "imageModel", "gpt-image-1",
+                                "imageBaseUrl", "https://relay.example.com/v1",
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.imageKeyReusesMain").value(false))
+                .andExpect(jsonPath("$.data.imageReady").value(false))
+                .andExpect(jsonPath("$.data.imageUnsupportedOnMain").value(false));
+        AiConfigService.ResolvedAiCredentials noLeak = aiConfigService.resolveForUser(userId);
+        assertThat(noLeak.imageApiKey()).isNull();
+        assertThat(noLeak.imageActive()).isFalse();
+
+        // 3. Save independent image key & vision key -> never return plaintext, preserve on blank, support selective clear
+        String visKey = "sk-vis-isolated-5555";
+        String imgKey = "sk-img-isolated-6666";
+        MvcResult bothRes = mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.ofEntries(
+                                Map.entry("providerName", "deepseek"),
+                                Map.entry("baseUrl", "https://api.deepseek.com/v1"),
+                                Map.entry("visionModel", "gpt-4o"),
+                                Map.entry("visionBaseUrl", "https://vision.example.com/v1"),
+                                Map.entry("visionApiKey", visKey),
+                                Map.entry("chatModel", "deepseek-chat"),
+                                Map.entry("imageModel", "gpt-image-1"),
+                                Map.entry("imageBaseUrl", "https://relay.example.com/v1"),
+                                Map.entry("imageApiKey", imgKey),
+                                Map.entry("enabled", true)
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.hasApiKey").value(true))
+                .andExpect(jsonPath("$.data.hasVisionApiKey").value(true))
+                .andExpect(jsonPath("$.data.visionApiKeyMasked").value("sk-v****5555"))
+                .andExpect(jsonPath("$.data.hasImageApiKey").value(true))
+                .andExpect(jsonPath("$.data.imageApiKeyMasked").value("sk-i****6666"))
+                .andExpect(jsonPath("$.data.imageReady").value(true))
+                .andReturn();
+        assertThat(bothRes.getResponse().getContentAsString()).doesNotContain(visKey, imgKey, "sk-ds-main-0001");
+
+        // Blank re-save preserves all 3 encrypted keys
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "deepseek",
+                                "baseUrl", "https://api.deepseek.com/v1",
+                                "visionModel", "gpt-4o",
+                                "visionBaseUrl", "https://vision.example.com/v1",
+                                "chatModel", "deepseek-chat",
+                                "imageModel", "gpt-image-1",
+                                "imageBaseUrl", "https://relay.example.com/v1",
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.hasApiKey").value(true))
+                .andExpect(jsonPath("$.data.hasVisionApiKey").value(true))
+                .andExpect(jsonPath("$.data.hasImageApiKey").value(true));
+
+        // 4. Same-host reuse between imageBaseUrl and visionBaseUrl when vision key is cleared
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "deepseek",
+                                "baseUrl", "https://api.deepseek.com/v1",
+                                "visionModel", "gpt-4o",
+                                "visionBaseUrl", "https://relay.example.com/v1",
+                                "clearVisionApiKey", true,
+                                "chatModel", "deepseek-chat",
+                                "imageModel", "gpt-image-1",
+                                "imageBaseUrl", "https://relay.example.com/v1",
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.hasVisionApiKey").value(false))
+                .andExpect(jsonPath("$.data.visionKeyReusesImage").value(true))
+                .andExpect(jsonPath("$.data.visionReady").value(true))
+                .andExpect(jsonPath("$.data.hasImageApiKey").value(true));
+        AiConfigService.ResolvedAiCredentials sameHost = aiConfigService.resolveForUser(userId);
+        assertThat(sameHost.visionApiKey()).isEqualTo(imgKey);
+
+        // 5. Clearing only image key leaves main key intact
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "deepseek",
+                                "baseUrl", "https://api.deepseek.com/v1",
+                                "visionModel", "deepseek-flash",
+                                "visionBaseUrl", "",
+                                "chatModel", "deepseek-chat",
+                                "imageModel", "gpt-image-1",
+                                "imageBaseUrl", "",
+                                "clearImageApiKey", true,
+                                "enabled", true
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.hasApiKey").value(true))
+                .andExpect(jsonPath("$.data.hasImageApiKey").value(false))
+                .andExpect(jsonPath("$.data.imageUnsupportedOnMain").value(true));
+    }
 }

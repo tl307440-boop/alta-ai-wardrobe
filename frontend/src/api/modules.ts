@@ -70,8 +70,14 @@ export const aiConfigApi = {
     apiKey?: string;
     clearApiKey?: boolean;
     visionModel: string;
+    visionBaseUrl?: string;
+    visionApiKey?: string;
+    clearVisionApiKey?: boolean;
     chatModel: string;
     imageModel?: string;
+    imageBaseUrl?: string;
+    imageApiKey?: string;
+    clearImageApiKey?: boolean;
     enabled: boolean;
     vtonEnabled?: boolean;
     vtonProvider?: string;
@@ -80,8 +86,21 @@ export const aiConfigApi = {
     clearVtonApiKey?: boolean;
     vtonPublicBaseUrl?: string;
   }) => unwrap<AiModelConfig>(http.put('/ai-config', payload)),
-  test: (payload?: { baseUrl?: string; apiKey?: string; chatModel?: string }) =>
-    unwrap<AiTestResult>(http.post('/ai-config/test', payload || {})),
+  test: (payload?: {
+    channel?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    chatModel?: string;
+    visionBaseUrl?: string;
+    visionApiKey?: string;
+    visionModel?: string;
+    imageBaseUrl?: string;
+    imageApiKey?: string;
+    imageModel?: string;
+    vtonEnabled?: boolean;
+    vtonApiKey?: string;
+    vtonModel?: string;
+  }) => unwrap<AiTestResult>(http.post('/ai-config/test', payload || {})),
   uploadModelReference: (file: File) => {
     const fd = new FormData();
     fd.append('file', file);

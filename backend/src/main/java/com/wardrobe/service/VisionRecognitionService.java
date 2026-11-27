@@ -47,7 +47,7 @@ public class VisionRecognitionService {
         }
 
         AiConfigService.ResolvedAiCredentials creds = aiConfigService.resolveForUser(userId);
-        if (creds.active()) {
+        if (creds.visionActive()) {
             String dataUri = storageService.toDataUri(original.bytes(), original.mimeType());
             JsonNode json = llmClient.recognizeClothingItem(creds, dataUri, sourceType);
             if (!json.path("isClothing").asBoolean(true)) {
@@ -134,7 +134,7 @@ public class VisionRecognitionService {
      */
     public VisionDto.ItemsDetectionVo detectItems(Long userId, MultipartFile file, String sourceType) {
         AiConfigService.ResolvedAiCredentials creds = aiConfigService.resolveForUser(userId);
-        if (!creds.active()) {
+        if (!creds.visionActive()) {
             storageService.validateImageOnly(file);
             return VisionDto.ItemsDetectionVo.builder()
                     .items(List.of())
@@ -316,7 +316,7 @@ public class VisionRecognitionService {
             StorageService.StoredImage stored = storageService.validateAndStoreImage(userId, file, "insp");
             inspirationUrl = stored.url();
             AiConfigService.ResolvedAiCredentials creds = aiConfigService.resolveForUser(userId);
-            if (creds.active()) {
+            if (creds.visionActive()) {
                 String dataUri = storageService.toDataUri(stored.bytes(), stored.mimeType());
                 JsonNode json = llmClient.analyzeStreetInspiration(creds, dataUri, userQuery, budget.toPlainString());
                 overallStyle = json.path("overallStyle").asText("个性化街拍穿搭");

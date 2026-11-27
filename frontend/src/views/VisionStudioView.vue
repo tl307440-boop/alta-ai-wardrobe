@@ -532,7 +532,9 @@ function removeSelectedPieces() {
 async function scanUploadedPhoto(file: File) {
   const runId = scanRunId;
   const cfg = wardrobeStore.aiConfig;
-  const llmReady = cfg.enabled && (cfg.hasApiKey || cfg.serverDefaultAvailable);
+  const llmReady = Boolean(
+    cfg.visionReady ?? (cfg.enabled && (cfg.hasVisionApiKey || cfg.hasApiKey || cfg.serverDefaultAvailable))
+  );
 
   // Kick off cloud multi-garment VLM detection in parallel if active (never blocks local SegFormer!)
   const vlmPromise: Promise<ItemsDetectionResult | null> = llmReady

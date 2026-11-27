@@ -52,27 +52,160 @@ public class MultimodalLlmClient {
     @Value("${app.ai.image-timeout-ms:90000}")
     private long imageTimeoutMs;
 
+    @Value("${app.vton.dashscope-base-url:https://dashscope.aliyuncs.com}")
+    private String dashscopeBaseUrl;
+
+    private static final String TINY_PNG_DATA_URI =
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+
     public record ReferenceImageInput(String filename, String mimeType, byte[] bytes) {}
 
     public record GeneratedImageResult(byte[] imageBytes, String remoteUrl, String endpointUsed) {}
 
     public AiConfigDto.TestResultVo testConnection(Long userId, AiConfigDto.TestRequest req) {
         AiConfigService.ResolvedAiCredentials saved = aiConfigService.resolveForUser(userId);
-        String baseUrl = (req != null && req.getBaseUrl() != null && !req.getBaseUrl().isBlank())
-                ? trimSlash(req.getBaseUrl()) : saved.baseUrl();
-        String apiKey = (req != null && req.getApiKey() != null && !req.getApiKey().isBlank())
+        String channelFilter = (req != null && req.getChannel() != null && !req.getChannel().isBlank())
+                ? req.getChannel().trim().toLowerCase(Locale.ROOT) : "all";
+        boolean runAll = "all".equals(channelFilter);
+
+        String chatBase = (req != null && req.getBaseUrl() != null && !req.getBaseUrl().isBlank())
+                ? trimSlash(req.getBaseUrl()) : trimSlash(saved.baseUrl());
+        String chatKey = (req != null && req.getApiKey() != null && !req.getApiKey().isBlank())
                 ? req.getApiKey().trim() : saved.apiKey();
-        String model = (req != null && req.getChatModel() != null && !req.getChatModel().isBlank())
+        String chatModel = (req != null && req.getChatModel() != null && !req.getChatModel().isBlank())
                 ? req.getChatModel().trim() : saved.chatModel();
 
-        if (apiKey == null || apiKey.isBlank()) {
+        String formVisionBase = (req != null && req.getVisionBaseUrl() != null)
+                ? trimSlash(req.getVisionBaseUrl())
+                : (AiConfigService.sameEndpoint(saved.visionBaseUrl(), saved.baseUrl()) ? "" : trimSlash(saved.visionBaseUrl()));
+        String formImageBase = (req != null && req.getImageBaseUrl() != null)
+                ? trimSlash(req.getImageBaseUrl())
+                : (AiConfigService.sameEndpoint(saved.imageBaseUrl(), saved.baseUrl()) ? "" : trimSlash(saved.imageBaseUrl()));
+
+        String visionModel = (req != null && req.getVisionModel() != null && !req.getVisionModel().isBlank())
+                ? req.getVisionModel().trim() : saved.visionModel();
+        String imageModel = (req != null && req.getImageModel() != null && !req.getImageModel().isBlank())
+                ? req.getImageModel().trim() : saved.imageModel();
+
+        String explicitVisionKey = (req != null && req.getVisionApiKey() != null && !req.getVisionApiKey().isBlank())
+                ? req.getVisionApiKey().trim() : null;
+        if (explicitVisionKey == null && saved.visionApiKey() != null && !saved.visionApiKey().isBlank()) {
+            String targetVBase = formVisionBase.isBlank() ? chatBase : formVisionBase;
+            if (AiConfigService.sameEndpoint(targetVBase, saved.visionBaseUrl())) {
+                explicitVisionKey = saved.visionApiKey();
+            }
+        }
+        String explicitImageKey = (req != null && req.getImageApiKey() != null && !req.getImageApiKey().isBlank())
+                ? req.getImageApiKey().trim() : null;
+        if (explicitImageKey == null && saved.imageApiKey() != null && !saved.imageApiKey().isBlank()) {
+            String targetIBase = formImageBase.isBlank() ? chatBase : formImageBase;
+            if (AiConfigService.sameEndpoint(targetIBase, saved.imageBaseUrl())) {
+                explicitImageKey = saved.imageApiKey();
+            }
+        }
+
+        String effectiveVisionBase = formVisionBase.isBlank() ? chatBase : formVisionBase;
+        String effectiveImageBase = formImageBase.isBlank() ? chatBase : formImageBase;
+        String effectiveVisionKey = AiConfigService.resolveScopedKey(
+                explicitVisionKey, formVisionBase, chatBase, chatKey, formImageBase, explicitImageKey);
+        String effectiveImageKey = AiConfigService.resolveScopedKey(
+                explicitImageKey, formImageBase, chatBase, chatKey, formVisionBase, explicitVisionKey);
+
+        boolean vtonEnabled = (req != null && req.getVtonEnabled() != null)
+                ? req.getVtonEnabled() : saved.vtonEnabled();
+        String vtonModel = (req != null && req.getVtonModel() != null && !req.getVtonModel().isBlank())
+                ? AiConfigService.normalizeVtonModel(req.getVtonModel()) : saved.vtonModel();
+        String vtonKey = (req != null && req.getVtonApiKey() != null && !req.getVtonApiKey().isBlank())
+                ? req.getVtonApiKey().trim() : saved.vtonApiKey();
+        if ((vtonKey == null || vtonKey.isBlank()) && isDashScopeHost(chatBase)) {
+            vtonKey = chatKey;
+        }
+
+        boolean noKeysAtAll = isBlank(chatKey) && isBlank(effectiveVisionKey)
+                && isBlank(effectiveImageKey) && (!vtonEnabled || isBlank(vtonKey));
+        if (noKeysAtAll) {
             return AiConfigDto.TestResultVo.builder()
                     .success(false)
                     .latencyMs(0)
                     .message("尚未填写 API Key，请先输入后再测试连通性")
+                    .channels(List.of())
                     .build();
         }
 
+        List<AiConfigDto.ChannelTestResult> channels = new ArrayList<>();
+        String chatReply = null;
+
+        // 1. Chat / Stylist channel
+        if (runAll || "chat".equals(channelFilter)) {
+            channels.add(probeChatChannel(chatBase, chatKey, chatModel));
+            AiConfigDto.ChannelTestResult last = channels.get(channels.size() - 1);
+            if (last.isSuccess() && !last.isSkipped()) {
+                chatReply = "OK";
+            }
+        }
+
+        // 2. Vision channel (multimodal 1x1 PNG test)
+        boolean shouldTestVision = "vision".equals(channelFilter)
+                || (runAll && !isBlank(visionModel));
+        if (shouldTestVision) {
+            channels.add(probeVisionChannel(effectiveVisionBase, effectiveVisionKey, visionModel, !formVisionBase.isBlank()));
+        }
+
+        // 3. General Image channel (free /models probe, never triggers paid image generation)
+        boolean shouldTestImage = "image".equals(channelFilter)
+                || (runAll && (!formImageBase.isBlank() || !isBlank(explicitImageKey) || AiConfigService.isUnsupportedImageHost(effectiveImageBase) || !isBlank(effectiveImageKey)));
+        if (shouldTestImage) {
+            channels.add(probeImageChannel(effectiveImageBase, effectiveImageKey, imageModel, !formImageBase.isBlank()));
+        }
+
+        // 4. Bailian VTON channel (when enabled or explicitly requested)
+        if ("vton".equals(channelFilter) || (runAll && vtonEnabled)) {
+            channels.add(probeVtonChannel(vtonKey, vtonModel));
+        }
+
+        List<AiConfigDto.ChannelTestResult> executed = channels.stream()
+                .filter(c -> !c.isSkipped())
+                .toList();
+        boolean overallSuccess = !executed.isEmpty() && executed.stream().allMatch(AiConfigDto.ChannelTestResult::isSuccess);
+        long totalLatency = channels.stream().mapToLong(AiConfigDto.ChannelTestResult::getLatencyMs).max().orElse(0L);
+
+        long okCount = executed.stream().filter(AiConfigDto.ChannelTestResult::isSuccess).count();
+        long failCount = executed.size() - okCount;
+        String summaryMsg;
+        if (overallSuccess) {
+            summaryMsg = executed.size() > 1
+                    ? "已检通道全部连通成功（" + okCount + " 项通过）"
+                    : executed.get(0).getMessage();
+        } else if (okCount > 0) {
+            String failedNames = executed.stream()
+                    .filter(c -> !c.isSuccess())
+                    .map(c -> c.getLabel() + "：" + c.getMessage())
+                    .collect(java.util.stream.Collectors.joining("；"));
+            summaryMsg = okCount + " 项通过，" + failCount + " 项未通过 — " + failedNames;
+        } else if (!executed.isEmpty()) {
+            summaryMsg = "连通性测试失败：" + executed.get(0).getMessage();
+        } else {
+            summaryMsg = channels.isEmpty() ? "未找到可测试的激活通道" : channels.get(0).getMessage();
+        }
+
+        return AiConfigDto.TestResultVo.builder()
+                .success(overallSuccess)
+                .latencyMs(totalLatency)
+                .modelReply(chatReply)
+                .message(summaryMsg)
+                .channels(channels)
+                .build();
+    }
+
+    private AiConfigDto.ChannelTestResult probeChatChannel(String baseUrl, String apiKey, String model) {
+        String hostLabel = extractHostLabel(baseUrl);
+        if (isBlank(apiKey)) {
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("chat").label("搭配推理").endpoint(hostLabel).model(model)
+                    .success(true).skipped(true).latencyMs(0)
+                    .message("未填写主站 API Key，推理将使用本地规则引擎")
+                    .build();
+        }
         long start = System.currentTimeMillis();
         try {
             Map<String, Object> body = new LinkedHashMap<>();
@@ -82,22 +215,230 @@ public class MultimodalLlmClient {
             body.put("messages", List.of(
                     Map.of("role", "user", "content", "Reply with OK only.")
             ));
-            String content = sendChatCompletion(baseUrl, apiKey, body, 12000);
+            sendChatCompletion(baseUrl, apiKey, body, 12000);
             long latency = System.currentTimeMillis() - start;
-            return AiConfigDto.TestResultVo.builder()
-                    .success(true)
-                    .latencyMs(latency)
-                    .modelReply(content != null ? content.trim() : "OK")
-                    .message("服务端连通成功，模型已实时生效")
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("chat").label("搭配推理").endpoint(hostLabel).model(model)
+                    .success(true).skipped(false).latencyMs(latency)
+                    .message("连通成功")
                     .build();
         } catch (Exception e) {
-            long latency = System.currentTimeMillis() - start;
-            return AiConfigDto.TestResultVo.builder()
-                    .success(false)
-                    .latencyMs(latency)
-                    .message("连通性测试失败：" + e.getMessage())
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("chat").label("搭配推理").endpoint(hostLabel).model(model)
+                    .success(false).skipped(false).latencyMs(System.currentTimeMillis() - start)
+                    .message(e.getMessage())
                     .build();
         }
+    }
+
+    private AiConfigDto.ChannelTestResult probeVisionChannel(String baseUrl, String apiKey, String model, boolean customEndpoint) {
+        String hostLabel = extractHostLabel(baseUrl);
+        if (isBlank(model)) {
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("vision").label("视觉识图").endpoint(hostLabel).model("")
+                    .success(true).skipped(true).latencyMs(0)
+                    .message("未填写视觉模型名，跳过识图测试")
+                    .build();
+        }
+        if (isBlank(apiKey)) {
+            String msg = customEndpoint
+                    ? "已填写独立视觉 Base URL，但缺少对应的视觉 API Key"
+                    : "未配置可用 API Key";
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("vision").label("视觉识图").endpoint(hostLabel).model(model)
+                    .success(!customEndpoint).skipped(!customEndpoint).latencyMs(0)
+                    .message(msg)
+                    .build();
+        }
+        long start = System.currentTimeMillis();
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("model", model);
+            body.put("max_tokens", 8);
+            body.put("temperature", 0);
+            body.put("messages", List.of(
+                    Map.of("role", "user", "content", List.of(
+                            Map.of("type", "text", "text", "Reply OK"),
+                            Map.of("type", "image_url", "image_url", Map.of("url", TINY_PNG_DATA_URI))
+                    ))
+            ));
+            sendChatCompletion(baseUrl, apiKey, body, 15000);
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("vision").label("视觉识图").endpoint(hostLabel).model(model)
+                    .success(true).skipped(false).latencyMs(System.currentTimeMillis() - start)
+                    .message("多模态 image_url 连通成功")
+                    .build();
+        } catch (Exception e) {
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("vision").label("视觉识图").endpoint(hostLabel).model(model)
+                    .success(false).skipped(false).latencyMs(System.currentTimeMillis() - start)
+                    .message(e.getMessage())
+                    .build();
+        }
+    }
+
+    private AiConfigDto.ChannelTestResult probeImageChannel(String baseUrl, String apiKey, String model, boolean customEndpoint) {
+        String hostLabel = extractHostLabel(baseUrl);
+        if (AiConfigService.isUnsupportedImageHost(baseUrl)) {
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("image").label("通用生图").endpoint(hostLabel).model(model)
+                    .success(true).skipped(true).latencyMs(0)
+                    .message("DeepSeek 官方不支持通用生图；请填写独立生图端点或启用阿里云百炼 VTON")
+                    .build();
+        }
+        if (isBlank(apiKey)) {
+            String msg = customEndpoint
+                    ? "已填写独立生图 Base URL，但缺少对应的生图 API Key"
+                    : "未配置可用生图 API Key";
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("image").label("通用生图").endpoint(hostLabel).model(model)
+                    .success(!customEndpoint).skipped(!customEndpoint).latencyMs(0)
+                    .message(msg)
+                    .build();
+        }
+        long start = System.currentTimeMillis();
+        try {
+            String endpoint = trimSlash(baseUrl) + "/models";
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofMillis(connectTimeoutMs))
+                    .build();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            long latency = System.currentTimeMillis() - start;
+            int code = response.statusCode();
+            if (code >= 200 && code < 300) {
+                boolean listed = responseContainsModel(response.body(), model);
+                String msg = listed
+                        ? "鉴权通过且模型列表包含 " + model
+                        : "端点鉴权通过（未在 /models 中显式列出 " + model + "，部分中转站按生图请求动态路由）";
+                return AiConfigDto.ChannelTestResult.builder()
+                        .channel("image").label("通用生图").endpoint(hostLabel).model(model)
+                        .success(true).skipped(false).latencyMs(latency)
+                        .message(msg)
+                        .build();
+            }
+            if (code == 401 || code == 403) {
+                return AiConfigDto.ChannelTestResult.builder()
+                        .channel("image").label("通用生图").endpoint(hostLabel).model(model)
+                        .success(false).skipped(false).latencyMs(latency)
+                        .message("生图端点 API Key 无效或无权限（HTTP " + code + "）")
+                        .build();
+            }
+            if (code == 404 || code == 405) {
+                return AiConfigDto.ChannelTestResult.builder()
+                        .channel("image").label("通用生图").endpoint(hostLabel).model(model)
+                        .success(true).skipped(false).latencyMs(latency)
+                        .message("生图端点网络可达（未开放 /models 列表，实际以生图调用为准）")
+                        .build();
+            }
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("image").label("通用生图").endpoint(hostLabel).model(model)
+                    .success(false).skipped(false).latencyMs(latency)
+                    .message("HTTP " + code)
+                    .build();
+        } catch (Exception e) {
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("image").label("通用生图").endpoint(hostLabel).model(model)
+                    .success(false).skipped(false).latencyMs(System.currentTimeMillis() - start)
+                    .message(e.getMessage())
+                    .build();
+        }
+    }
+
+    private AiConfigDto.ChannelTestResult probeVtonChannel(String vtonKey, String vtonModel) {
+        String base = trimSlash(dashscopeBaseUrl);
+        if (isBlank(base)) base = "https://dashscope.aliyuncs.com";
+        String hostLabel = extractHostLabel(base);
+        if (isBlank(vtonKey)) {
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("vton").label("百炼 VTON").endpoint(hostLabel).model(vtonModel)
+                    .success(false).skipped(false).latencyMs(0)
+                    .message("已开启百炼 VTON，但未配置百炼 VTON API Key")
+                    .build();
+        }
+        long start = System.currentTimeMillis();
+        try {
+            String endpoint = base + "/compatible-mode/v1/models";
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofMillis(connectTimeoutMs))
+                    .build();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("Authorization", "Bearer " + vtonKey)
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            long latency = System.currentTimeMillis() - start;
+            int code = response.statusCode();
+            if (code >= 200 && code < 300) {
+                return AiConfigDto.ChannelTestResult.builder()
+                        .channel("vton").label("百炼 VTON").endpoint(hostLabel).model(vtonModel)
+                        .success(true).skipped(false).latencyMs(latency)
+                        .message("百炼 Key 鉴权通过")
+                        .build();
+            }
+            if (code == 401 || code == 403) {
+                return AiConfigDto.ChannelTestResult.builder()
+                        .channel("vton").label("百炼 VTON").endpoint(hostLabel).model(vtonModel)
+                        .success(false).skipped(false).latencyMs(latency)
+                        .message("百炼 Key 无效或未开通模型权限（HTTP " + code + "）")
+                        .build();
+            }
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("vton").label("百炼 VTON").endpoint(hostLabel).model(vtonModel)
+                    .success(false).skipped(false).latencyMs(latency)
+                    .message("HTTP " + code)
+                    .build();
+        } catch (Exception e) {
+            return AiConfigDto.ChannelTestResult.builder()
+                    .channel("vton").label("百炼 VTON").endpoint(hostLabel).model(vtonModel)
+                    .success(false).skipped(false).latencyMs(System.currentTimeMillis() - start)
+                    .message(e.getMessage())
+                    .build();
+        }
+    }
+
+    private boolean responseContainsModel(String body, String model) {
+        if (isBlank(body) || isBlank(model)) return false;
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode data = root.path("data");
+            if (data.isArray()) {
+                for (JsonNode n : data) {
+                    if (model.equalsIgnoreCase(n.path("id").asText(""))) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // Fall back to false
+        }
+        return false;
+    }
+
+    private boolean isDashScopeHost(String baseUrl) {
+        return baseUrl != null && baseUrl.toLowerCase(Locale.ROOT).contains("dashscope.aliyuncs.com");
+    }
+
+    private String extractHostLabel(String baseUrl) {
+        if (isBlank(baseUrl)) return "未配置";
+        try {
+            URI uri = URI.create(baseUrl.trim());
+            if (uri.getHost() != null) {
+                return uri.getPort() > 0 ? uri.getHost() + ":" + uri.getPort() : uri.getHost();
+            }
+        } catch (Exception ignored) {
+            // Fall through
+        }
+        return baseUrl.trim();
+    }
+
+    private boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     public JsonNode recognizeClothingItem(AiConfigService.ResolvedAiCredentials creds, String imageDataUri, String sourceType) {
@@ -307,7 +648,7 @@ public class MultimodalLlmClient {
     public JsonNode verifyTryOnQuality(AiConfigService.ResolvedAiCredentials creds,
                                        String checklistText,
                                        List<String> imageDataUris) {
-        if (creds == null || !creds.active()
+        if (creds == null || !creds.visionActive()
                 || creds.visionModel() == null || creds.visionModel().isBlank()
                 || imageDataUris == null || imageDataUris.size() < 2) {
             return null;
@@ -400,8 +741,13 @@ public class MultimodalLlmClient {
             }
         }
 
+        String imageBaseUrl = (creds.imageBaseUrl() != null && !creds.imageBaseUrl().isBlank())
+                ? creds.imageBaseUrl() : creds.baseUrl();
+        String imageApiKey = (creds.imageApiKey() != null && !creds.imageApiKey().isBlank())
+                ? creds.imageApiKey() : creds.apiKey();
+
         if ("chat_stream".equals(mode)) {
-            return sendChatStreamImage(creds.baseUrl(), creds.apiKey(), model, prompt, optimizedRefs);
+            return sendChatStreamImage(imageBaseUrl, imageApiKey, model, prompt, optimizedRefs);
         }
 
         String size = hdMode
@@ -411,7 +757,7 @@ public class MultimodalLlmClient {
 
         if (!optimizedRefs.isEmpty()) {
             try {
-                return sendImagesEditsSmart(creds.baseUrl(), creds.apiKey(), model, prompt, optimizedRefs, size, quality);
+                return sendImagesEditsSmart(imageBaseUrl, imageApiKey, model, prompt, optimizedRefs, size, quality);
             } catch (Exception e) {
                 String msg = Objects.toString(e.getMessage(), "");
                 // Never trigger a duplicate paid /images/generations call when upstream timed out (524/504/408)
@@ -421,7 +767,7 @@ public class MultimodalLlmClient {
                 log.warn("Upstream /images/edits unavailable ({}), falling back to /images/generations", msg);
             }
         }
-        return sendImagesGenerationsSmart(creds.baseUrl(), creds.apiKey(), model, prompt, size, quality);
+        return sendImagesGenerationsSmart(imageBaseUrl, imageApiKey, model, prompt, size, quality);
     }
 
     private boolean isTimeoutError(Exception e, String msg) {
@@ -925,7 +1271,11 @@ public class MultimodalLlmClient {
                 Map.of("role", "system", "content", systemPrompt),
                 Map.of("role", "user", "content", userContent)
         ));
-        return executeWithJsonRetry(creds.baseUrl(), creds.apiKey(), body);
+        String visionBaseUrl = (creds.visionBaseUrl() != null && !creds.visionBaseUrl().isBlank())
+                ? creds.visionBaseUrl() : creds.baseUrl();
+        String visionApiKey = (creds.visionApiKey() != null && !creds.visionApiKey().isBlank())
+                ? creds.visionApiKey() : creds.apiKey();
+        return executeWithJsonRetry(visionBaseUrl, visionApiKey, body);
     }
 
     private JsonNode callTextForJson(AiConfigService.ResolvedAiCredentials creds, String systemPrompt, String userPrompt) {
