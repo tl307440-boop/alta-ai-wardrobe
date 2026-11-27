@@ -17,6 +17,17 @@ const wardrobeStore = useWardrobeStore();
 const lookbookStore = useLookbookStore();
 const toast = useToastStore();
 
+const TRYON_QC_STORAGE_KEY = 'alta_tryon_qc_enabled';
+function readInitialQc(): boolean {
+  try {
+    const raw = localStorage.getItem(TRYON_QC_STORAGE_KEY);
+    return raw === null ? true : raw === 'true';
+  } catch {
+    return true;
+  }
+}
+
+const enableQualityCheck = ref<boolean>(readInitialQc());
 const stylePreset = ref<'studio_white' | 'street_shanghai' | 'window_light' | 'magazine_editorial'>('studio_white');
 const generationMode = ref<'auto' | 'hd' | 'chat_stream'>('auto');
 const customPrompt = ref('');
@@ -92,12 +103,26 @@ const activePreviewUrl = computed(() => {
 
 const modelRefUrl = computed(() => wardrobeStore.aiConfig.modelReferenceUrl || '');
 const hasImageApiReady = computed(() => wardrobeStore.aiConfig.hasApiKey && wardrobeStore.aiConfig.enabled);
+const ACTIVE_VTON_MODELS = ['qwen-image-2.1-pro', 'qwen-image-2.1-turbo', 'qwen-image-3.0-pro', 'wan2.7-image-pro'] as const;
+const displayVtonModel = computed(() => {
+  const raw = (wardrobeStore.aiConfig.vtonModel || '').trim().toLowerCase();
+  return (ACTIVE_VTON_MODELS as readonly string[]).includes(raw) ? raw : 'qwen-image-2.1-pro';
+});
 const vtonReady = computed(() =>
   Boolean(
     wardrobeStore.aiConfig.vtonEnabled &&
       (wardrobeStore.aiConfig.hasVtonApiKey || wardrobeStore.aiConfig.vtonKeyReusesMain)
   )
 );
+
+function toggleQualityCheck() {
+  enableQualityCheck.value = !enableQualityCheck.value;
+  try {
+    localStorage.setItem(TRYON_QC_STORAGE_KEY, String(enableQualityCheck.value));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
 const isOnePiecePlan = computed(() =>
   (props.plan.slots || []).some(
     (s) =>
@@ -222,6 +247,7 @@ async function handleGenerate() {
       modelPreset: selectedModelPreset.value,
       upperGarmentPreference: upperGarmentPreference.value,
       clientOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+      enableQualityCheck: enableQualityCheck.value,
     });
     if (job) {
       toast.show('生图任务已提交后台队列，刷新或切换页面都会自动保留进度与成图');
@@ -306,7 +332,7 @@ function downloadPreview() {
           >
             {{
               vtonReady
-                ? `百炼多图试穿已激活 · ${wardrobeStore.aiConfig.vtonModel || 'qwen-image-2.1-pro'}`
+                ? `百炼多图试穿已激活 · ${displayVtonModel}`
                 : hasImageApiReady
                   ? `通用生图已激活 · ${wardrobeStore.aiConfig.imageModel || 'gpt-image-1'}`
                   : '演示降级模式（未配置生图 Key）'
@@ -390,6 +416,27 @@ function downloadPreview() {
             {{ m.label }}
           </button>
         </div>
+      </div>
+
+      <!-- Post-generation VLM Quality Gate Switch -->
+      <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-2xl bg-[#FAFAFA] border border-black/[0.06] text-[11.5px]">
+        <div class="flex items-center gap-1.5 text-[#333333]">
+          <AppIcon name="shield-check" :size="14" class="text-black" />
+          <span class="font-medium">VLM 自动质检防翻车</span>
+          <span class="text-[#666666] hidden sm:inline">（核对人物与单品还原度，不达标最多自动重画 1 次）</span>
+        </div>
+        <button
+          type="button"
+          @click="toggleQualityCheck"
+          class="px-3 py-1 rounded-full text-[11px] font-medium border transition"
+          :class="
+            enableQualityCheck
+              ? 'bg-black text-white border-black'
+              : 'bg-white text-[#666666] border-black/15 hover:border-black'
+          "
+        >
+          {{ enableQualityCheck ? '已开启 · 高保真验收' : '已关闭 · 极速直出' }}
+        </button>
       </div>
 
       <!-- Model Picker: User Reference Photo + Built-in Standard Studio Models -->
@@ -638,7 +685,38 @@ function downloadPreview() {
                         : '衣橱属性解析'
                   }}
                 </span>
+                <span
+                  v-if="selectedJob.visualReport?.qualityCheckExecuted"
+                  class="px-2 py-0.5 rounded-full text-[10px] font-mono border"
+                  :class="
+                    selectedJob.visualReport.qualityCheckPassed
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                  "
+                >
+                  {{
+                    (selectedJob.visualReport.qualityRetryCount || 0) > 0
+                      ? `自动重画复检 · ${selectedJob.visualReport.qualityScore}分`
+                      : selectedJob.visualReport.qualityCheckPassed
+                        ? `VLM 质检通过 · ${selectedJob.visualReport.qualityScore}分`
+                        : `质检提示 · ${selectedJob.visualReport.qualityScore}分`
+                  }}
+                </span>
               </div>
+            </div>
+
+            <div
+              v-if="selectedJob.visualReport?.qualityCheckExecuted && selectedJob.visualReport?.qualitySummary"
+              class="px-3 py-2 rounded-xl bg-white border border-black/[0.06] text-[11px] text-[#333333] leading-relaxed flex flex-wrap items-center gap-1.5"
+            >
+              <AppIcon name="shield-check" :size="13" class="text-black shrink-0" />
+              <span>{{ selectedJob.visualReport.qualitySummary }}</span>
+              <span
+                v-if="selectedJob.visualReport.qualityIssues && selectedJob.visualReport.qualityIssues.length > 0"
+                class="text-[#666666]"
+              >
+                （{{ selectedJob.visualReport.qualityIssues.join('；') }}）
+              </span>
             </div>
 
             <div

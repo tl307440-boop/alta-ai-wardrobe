@@ -204,21 +204,25 @@ public class MultimodalLlmClient {
                   "aiReasoning": "具体说明色彩呼应、温度适穿性与场景契合度（60~110字中文）",
                   "matchScore": 96.0
                 }
-                要求：selectedItemIds 只能从候选衣橱的真实 id 中挑选，每个品类最多选 1 件；若衣橱已有合适外套则 missingItems 可为空数组 []。
+                造型原则与硬性要求：
+                1. selectedItemIds 只能从候选衣橱的真实 id 中挑选，每个品类最多选 1 件；严禁连衣裙与独立上下装混选；
+                2. 单一视觉焦点：整套最多 1 件强印花/亮色/强肌理单品作主角，其余单品做克制衬托；
+                3. 廓形重量平衡：下装宽松或垂坠（阔腿/微喇/伞裙）时配利落上衣；厚重外搭里配干净极简内搭；
+                4. 物理叠穿合理并兼顾轮换多样性：优先同色/邻近色或一处可控对比，避免每次只选黑白灰基础款；若衣橱已有合适外套则 missingItems 可为空数组 []。
                 """;
 
         return callTextForJson(creds, systemPrompt, stylistUserPrompt);
     }
 
     /**
-     * Visual Contact-Sheet outfit curation: sends the numbered 1024x1024 garment grid alongside
+     * Visual Contact-Sheet outfit curation: sends the numbered 12-tile garment grid alongside
      * structured wardrobe metadata so the VLM visually evaluates fabrics, prints, proportions, and colors.
      */
     public JsonNode curateOutfitPlanWithContactSheet(AiConfigService.ResolvedAiCredentials creds,
                                                      String stylistUserPrompt,
                                                      String contactSheetDataUri) {
         String systemPrompt = """
-                你是高级杂志风私人多模态 AI 造型师。你将同时收到一张用户真实衣橱单品的【视觉联络表 Contact Sheet（每张图左上角标注 #1..#N 与下方 ID）】以及文字元数据。
+                你是高级杂志风私人多模态 AI 造型师。你将同时收到一张用户真实衣橱单品的【视觉联络表 Contact Sheet（最多 12 件高清格，左上角标注 #1..#N 与下方 ID）】以及文字元数据。
                 请务必**先看图审视每件衣服的真实版型、材质肌理、印花图案与色彩深浅**，再结合天气、场景、身形与个人喜好挑出最和谐的全身搭配，仅返回合法 JSON，禁止输出 Markdown 围栏或多余说明：
                 {
                   "themeTitle": "温柔通勤 · 轻松出门",
@@ -236,10 +240,12 @@ public class MultimodalLlmClient {
                   "aiReasoning": "结合画面中观察到的真实面料/版型/色彩深浅，具体说明搭配理由与比例亮点（70~120字中文）",
                   "matchScore": 96.0
                 }
-                硬性规则：
+                造型原则与硬性规则：
                 1. selectedItemIds 只能从候选衣橱的真实数字 id 中挑选，每个品类（outerwear/top/bottom/shoes/accessory）最多选 1 件；
                 2. 严禁同时选择连衣裙与独立上下装，严禁印花打架或面料季节冲突；
-                3. 若衣橱已有合适外套则 missingItems 可为空数组 []。
+                3. 单一视觉焦点：一套最多 1 件强印花/亮色/特殊材质主角单品，其余用低饱和净色衬托，保留至多 1 处可控冷暖对比；
+                4. 廓形重量平衡与叠穿物理合理性：下装宽松垂坠时上装简洁利落；厚重外搭里配极简内搭且不能穿帮或相互掩盖；
+                5. 轮换多样性：不偷懒只挑黑白灰基础款，主动结合图中特色单品打造质感造型；若衣橱已有合适外套则 missingItems 可为空数组 []。
                 """;
         return callVisionForJson(creds, systemPrompt, stylistUserPrompt, contactSheetDataUri);
     }
@@ -291,6 +297,40 @@ public class MultimodalLlmClient {
             return "data:" + compressed.mimeType() + ";base64," + Base64.getEncoder().encodeToString(compressed.bytes());
         }
         return "data:" + safeMime + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
+    /**
+     * Post-generation VLM quality gate for Virtual Try-On results: compares the generated try-on image
+     * against the original model photo and garment references to detect drift, swapped clothes, or artifacts.
+     */
+    public JsonNode verifyTryOnQuality(AiConfigService.ResolvedAiCredentials creds,
+                                       String checklistText,
+                                       List<String> imageDataUris) {
+        if (creds == null || !creds.active()
+                || creds.visionModel() == null || creds.visionModel().isBlank()
+                || imageDataUris == null || imageDataUris.size() < 2) {
+            return null;
+        }
+        String systemPrompt = """
+                你是严格的虚拟试衣（VTON）视觉质检总监。你会收到一组参考图与最后一张【AI 生成试穿成图】：
+                - 通常 [图1] 为原模特参考图，[中间图] 为真实衣物单品原图，[最后一张图] 为需要验收的 AI 生成试穿效果图。
+                请对照原图从以下 4 项严格核查成图质量，仅返回合法 JSON，禁止输出 Markdown 围栏：
+                {
+                  "passed": true,
+                  "score": 90,
+                  "summary": "18~38字中文质检总结，写明人物一致性与单品还原度",
+                  "issues": [],
+                  "correctionHint": ""
+                }
+                核查标准：
+                1. 人物面部五官、发型与头身比例是否与[图1]自然一致（无明显换脸、多肢体或面部崩坏）；
+                2. 核心单品（上衣/外套/下装/连衣裙等）是否完整穿在身上，颜色、领型、版型、开合方式（拉链/纽扣）是否忠实还原未篡改；
+                3. 全身构图自然完整（无异常截头/截脚或服饰融合穿帮）；
+                4. 画面干净无乱码文字、拼贴边框或水印。
+                判定要求：
+                - score 范围 0~100；存在明显单品穿错、颜色严重偏差、擅改款式、畸形或人脸严重漂移时，必须令 passed=false、score < 72，并在 issues 列出具体问题、在 correctionHint 给出简明重画修正指令（中文 15~45 字）。
+                """;
+        return callVisionForJson(creds, systemPrompt, checklistText, imageDataUris);
     }
 
     /**

@@ -24,5 +24,7 @@ public class UserPreference {
     private String colorSeason;
     private Integer heightCm;
     private String styleWeights;
+    private String learnedColorScores;
+    private String learnedPairScores;
     private LocalDateTime updatedAt;
 }

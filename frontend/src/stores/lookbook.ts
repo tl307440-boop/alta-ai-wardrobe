@@ -197,9 +197,6 @@ export const useLookbookStore = defineStore('lookbook', () => {
   async function bootstrap() {
     const wardrobeStore = useWardrobeStore();
     budget.value = Number(wardrobeStore.preference.budgetLimit) || 300;
-    if (wardrobeStore.items.length > 0 && !anchorItemId.value) {
-      anchorItemId.value = wardrobeStore.items[0].id;
-    }
     const [favs, hist, allPlans] = await Promise.all([
       outfitApi.listPlans(true),
       outfitApi.listHistory(),
@@ -254,7 +251,7 @@ export const useLookbookStore = defineStore('lookbook', () => {
     triggerType?: 'daily_weather' | 'nl_query' | 'anchor_item';
     sceneTag?: string;
     userQuery?: string;
-    anchorItemId?: number;
+    anchorItemId?: number | null;
     refineInstruction?: string;
     basePlanId?: number;
     reviveIdle?: boolean;
@@ -264,13 +261,27 @@ export const useLookbookStore = defineStore('lookbook', () => {
     loading.value = true;
     try {
       const w = wardrobeStore.activeWeather;
+      const effectiveTriggerType =
+        overrides?.triggerType ||
+        (triggerMode.value === 'nl' ? 'nl_query' : triggerMode.value === 'anchor' ? 'anchor_item' : 'daily_weather');
+
+      let resolvedAnchorId: number | undefined;
+      if (overrides && 'anchorItemId' in overrides) {
+        resolvedAnchorId = overrides.anchorItemId ?? undefined;
+      } else if (effectiveTriggerType === 'anchor_item') {
+        resolvedAnchorId = anchorItemId.value ?? undefined;
+      } else if (overrides?.refineInstruction) {
+        const currentLocked = currentPlan.value?.slots.find((s) => !s.missing && s.anchor)?.item?.id;
+        resolvedAnchorId = currentLocked && currentLocked > 0 ? currentLocked : undefined;
+      } else {
+        resolvedAnchorId = undefined;
+      }
+
       const plan = await outfitApi.recommend({
-        triggerType:
-          overrides?.triggerType ||
-          (triggerMode.value === 'nl' ? 'nl_query' : triggerMode.value === 'anchor' ? 'anchor_item' : 'daily_weather'),
+        triggerType: effectiveTriggerType,
         sceneTag: overrides?.sceneTag,
         userQuery: overrides?.userQuery ?? nlQuery.value,
-        anchorItemId: overrides?.anchorItemId ?? (anchorItemId.value || undefined),
+        anchorItemId: resolvedAnchorId,
         budgetLimit: budget.value,
         refineInstruction: overrides?.refineInstruction,
         basePlanId: overrides?.basePlanId,
@@ -299,8 +310,28 @@ export const useLookbookStore = defineStore('lookbook', () => {
       .map((s) => s.item.id);
     return generateRecommendation({
       triggerType: 'daily_weather',
+      anchorItemId: null,
       excludeItemIds: excludeIds.length > 0 ? excludeIds : undefined,
     });
+  }
+
+  /**
+   * Toggle interactive lock/unlock for a garment slot inside the active plan.
+   */
+  function toggleSlotLock(itemId: number): boolean {
+    if (!currentPlan.value || !itemId || itemId <= 0) return false;
+    const target = currentPlan.value.slots.find((s) => !s.missing && s.item?.id === itemId);
+    if (!target) return false;
+    const nextLocked = !target.anchor;
+    currentPlan.value = {
+      ...currentPlan.value,
+      slots: currentPlan.value.slots.map((s) => ({
+        ...s,
+        anchor: !s.missing && s.item?.id === itemId ? nextLocked : false,
+      })),
+    };
+    anchorItemId.value = nextLocked ? itemId : null;
+    return nextLocked;
   }
 
   async function swapSlot(category: string, excludeItemIds: number[] = []) {
@@ -331,6 +362,7 @@ export const useLookbookStore = defineStore('lookbook', () => {
     modelPreset?: string;
     upperGarmentPreference?: 'auto' | 'outerwear' | 'top';
     clientOrigin?: string;
+    enableQualityCheck?: boolean;
   }): Promise<TryOnJob | null> {
     if (!currentPlan.value) return null;
     const job = await outfitApi.submitTryOnJob(currentPlan.value.id, payload);
@@ -508,6 +540,7 @@ export const useLookbookStore = defineStore('lookbook', () => {
     refreshTryOnJobs,
     generateRecommendation,
     shuffleOutfit,
+    toggleSlotLock,
     swapSlot,
     saveCollageLayout,
     submitTryOnJob,

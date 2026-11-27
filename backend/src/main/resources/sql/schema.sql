@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS `user_preference` (
   `color_season` VARCHAR(40) DEFAULT '中性百搭' COMMENT '四季色彩季型：春季暖亮/夏季冷柔/秋季暖深/冬季冷艳/中性百搭',
   `height_cm` INT DEFAULT 165 COMMENT '身高(cm)',
   `style_weights` JSON DEFAULT NULL COMMENT '隐性风格偏好权重映射',
+  `learned_color_scores` JSON DEFAULT NULL COMMENT '从历史反馈学习到的色彩偏好分',
+  `learned_pair_scores` JSON DEFAULT NULL COMMENT '从历史反馈学习到的单品两两搭配分',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_pref_user_id` (`user_id`),

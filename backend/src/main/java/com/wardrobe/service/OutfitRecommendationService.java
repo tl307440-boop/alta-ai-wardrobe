@@ -184,52 +184,134 @@ public class OutfitRecommendationService {
         List<String> favColors = jsonUtils.toStringList(pref.getFavoriteColors());
         List<String> dislikedColors = jsonUtils.toStringList(pref.getDislikedColors());
         Map<String, Double> styleWeights = jsonUtils.toDoubleMap(pref.getStyleWeights());
+        Map<String, Double> learnedColorScores = jsonUtils.toDoubleMap(pref.getLearnedColorScores());
+        Map<String, Double> learnedPairScores = jsonUtils.toDoubleMap(pref.getLearnedPairScores());
         List<String> seasonPalette = PreferenceService.getSeasonRecommendedColors(pref.getColorSeason());
         List<String> shapeKeywords = PreferenceService.getBodyShapeKeywords(pref.getBodyShape());
+        double medianWear = computeMedianWear(wardrobe);
 
         List<ScoredItem> result = new ArrayList<>();
         for (WardrobeItem item : wardrobe) {
             int thickness = item.getThickness() != null ? item.getThickness() : 2;
-            String season = Objects.toString(item.getSeason(), "spring,autumn").toLowerCase();
+            String season = Objects.toString(item.getSeason(), "spring,autumn").toLowerCase(Locale.ROOT);
 
-            // Stage 1: Hard constraints
+            // Stage 1: Hard temperature skips
             if (temp >= 25 && thickness >= 3) continue;
             if (temp <= 10 && thickness == 1 && !season.contains("autumn") && !season.contains("winter")) continue;
 
-            double tempMatch = computeTempMatch(temp, thickness, season);
-            double stylePref = computeStylePref(item, favStyles, styleWeights);
-            double colorPref = computeColorPref(item.getColor(), favColors, dislikedColors);
-            double sceneMatch = computeSceneMatch(item, scene);
+            // Multiplicative hard-constraint gates (prevents high style/scene score from masking seasonal mismatch)
+            double weatherFactor = computeWeatherFactor(temp, thickness, season, item.getCategory());
+            double seasonFactor = computeSeasonFactor(temp, season);
             int recentCount = recentWearCounts.getOrDefault(item.getId(), 0);
-            double recentPenalty = Math.min(1.0, recentCount * 0.35);
+            double recencyFactor = recentCount <= 0 ? 1.0 : Math.max(0.25, 1.0 - recentCount * 0.30);
+            double colorGate = dislikedColors.contains(item.getColor()) ? 0.15 : 1.0;
 
-            double total = 0.30 * tempMatch + 0.25 * stylePref + 0.15 * colorPref + 0.30 * sceneMatch - 0.15 * recentPenalty;
-            if (dislikedColors.contains(item.getColor())) {
-                total -= 0.40;
-            }
+            double stylePref = computeStylePref(item, favStyles, styleWeights);
+            double baseColorPref = computeColorPref(item.getColor(), favColors, dislikedColors);
+            double learnedColorDelta = item.getColor() != null
+                    ? learnedColorScores.getOrDefault(item.getColor().trim(), 0.0) : 0.0;
+            double colorPref = Math.max(0.10, Math.min(1.15, baseColorPref + learnedColorDelta));
+            double sceneMatch = computeSceneMatch(item, scene);
+
+            double affinity = 0.35 * stylePref + 0.25 * colorPref + 0.40 * sceneMatch;
             // Seasonal Color Analysis harmony bonus
             if (item.getColor() != null && seasonPalette.contains(item.getColor())) {
-                total += 0.08;
+                affinity += 0.08;
             }
             // Body Shape flattering silhouette bonus
             String itemHay = Objects.toString(item.getName(), "") + " " + Objects.toString(item.getStyleTags(), "");
             if (shapeKeywords.stream().anyMatch(itemHay::contains)) {
-                total += 0.06;
+                affinity += 0.06;
             }
-            // Revive Idle Mode ("The Mirror" neglected piece booster)
+            // Revive Idle Mode & gentle underused fairness boost
             int wears = item.getWearCount() != null ? item.getWearCount() : 0;
             if (reviveIdle && wears <= 2) {
-                total += 0.25;
+                affinity += 0.25;
+            } else if (medianWear > 1.0 && wears <= medianWear * 0.4) {
+                affinity += 0.06;
             }
             // Dislike / avoid previously rejected items
             if (excludeItemIds != null && excludeItemIds.contains(item.getId())) {
-                total -= 0.35;
+                affinity -= 0.35;
             }
+
+            double total = weatherFactor * seasonFactor * recencyFactor * colorGate * Math.max(0.05, affinity);
             result.add(new ScoredItem(item, Math.max(0.0, Math.min(1.0, total))));
         }
 
         result.sort((a, b) -> Double.compare(b.score, a.score));
+
+        // Top-20 learned pair co-occurrence bonus re-ranking
+        if (!learnedPairScores.isEmpty() && result.size() > 1) {
+            int topLimit = Math.min(20, result.size());
+            double[] adjusted = new double[topLimit];
+            for (int i = 0; i < topLimit; i++) {
+                WardrobeItem a = result.get(i).item;
+                double sum = 0.0;
+                int hits = 0;
+                for (int j = 0; j < topLimit; j++) {
+                    if (i == j) continue;
+                    String key = PreferenceService.pairKey(a.getId(), result.get(j).item.getId());
+                    if (key == null) continue;
+                    Double val = learnedPairScores.get(key);
+                    if (val != null && Math.abs(val) > 1e-6) {
+                        sum += val;
+                        hits++;
+                    }
+                }
+                double pairBonus = hits > 0 ? Math.max(-0.12, Math.min(0.18, sum / hits)) : 0.0;
+                adjusted[i] = Math.max(0.0, Math.min(1.0, result.get(i).score + pairBonus));
+            }
+            for (int i = 0; i < topLimit; i++) {
+                result.set(i, new ScoredItem(result.get(i).item, adjusted[i]));
+            }
+            result.sort((a, b) -> Double.compare(b.score, a.score));
+        }
+
         return result;
+    }
+
+    private double computeMedianWear(List<WardrobeItem> wardrobe) {
+        if (wardrobe == null || wardrobe.isEmpty()) return 0.0;
+        int[] wears = wardrobe.stream()
+                .mapToInt(w -> w.getWearCount() != null ? w.getWearCount() : 0)
+                .sorted()
+                .toArray();
+        int n = wears.length;
+        return (n % 2 == 1) ? wears[n / 2] : (wears[n / 2 - 1] + wears[n / 2]) / 2.0;
+    }
+
+    private double computeWeatherFactor(int temp, int thickness, String season, String category) {
+        double base = computeTempMatch(temp, thickness, season);
+        String cat = Objects.toString(category, "").toLowerCase(Locale.ROOT);
+        if (temp >= 23 && thickness >= 3) {
+            return 0.15;
+        }
+        if (temp >= 22 && "outerwear".equals(cat) && thickness >= 2) {
+            return Math.min(base, 0.55);
+        }
+        if (temp <= 12 && thickness == 1 && !season.contains("winter") && !season.contains("autumn")) {
+            return 0.20;
+        }
+        return base;
+    }
+
+    private double computeSeasonFactor(int temp, String season) {
+        if (season == null || season.isBlank() || season.contains("all")) {
+            return 1.0;
+        }
+        if (temp >= 25) {
+            if (season.contains("summer")) return 1.0;
+            if (season.contains("spring") || season.contains("autumn")) return 0.72;
+            return 0.25;
+        } else if (temp <= 11) {
+            if (season.contains("winter")) return 1.0;
+            if (season.contains("autumn") || season.contains("spring")) return 0.78;
+            return 0.30;
+        } else {
+            if (season.contains("spring") || season.contains("autumn")) return 1.0;
+            return 0.75;
+        }
     }
 
     private double computeTempMatch(int temp, int thickness, String season) {
@@ -286,17 +368,8 @@ public class OutfitRecommendationService {
     private StylistOutput callLlmStylist(Long userId, AiConfigService.ResolvedAiCredentials creds, List<ScoredItem> scored,
                                          WeatherVo weather, String scene, OutfitDto.RecommendRequest req,
                                          WardrobeItem anchor, OutfitPlan basePlan, UserPreference pref, BigDecimal budget) {
-        // Select top <=16 items for Visual Contact Sheet (ensuring locked anchor is always included)
-        List<WardrobeItem> sheetItems = new ArrayList<>();
-        if (anchor != null) {
-            sheetItems.add(anchor);
-        }
-        for (ScoredItem si : scored) {
-            if (sheetItems.size() >= 16) break;
-            if (anchor == null || !Objects.equals(si.item.getId(), anchor.getId())) {
-                sheetItems.add(si.item);
-            }
-        }
+        // Select top <=12 role-diverse items for High-Res Visual Contact Sheet (anchor always first)
+        List<WardrobeItem> sheetItems = selectDiverseContactSheetItems(scored, anchor, weather.getTemp(), 12);
         OutfitContactSheetService.ContactSheet sheet = contactSheetService.buildContactSheet(userId, sheetItems);
         Map<Long, String> idToSheetTag = new HashMap<>();
         if (sheet != null && sheet.tagToItemId() != null) {
@@ -617,6 +690,15 @@ public class OutfitRecommendationService {
                 + nextItem.getName() + "」（" + nextItem.getColor() + "），实穿复用率进一步提升。");
         outfitPlanMapper.updateById(plan);
 
+        if (currentInCat != null && nextItem != null && !Objects.equals(currentInCat.getId(), nextItem.getId())) {
+            Set<Long> finalIds = new HashSet<>(currentIds);
+            finalIds.remove(nextItem.getId());
+            List<WardrobeItem> keptContext = wardrobe.stream()
+                    .filter(w -> finalIds.contains(w.getId()))
+                    .collect(Collectors.toList());
+            preferenceService.recordSlotSwapFeedback(userId, currentInCat, nextItem, keptContext);
+        }
+
         List<OutfitDto.ProductVo> products = commerceMatchService.findByIds(jsonUtils.toLongList(plan.getRecommendedProductIds()));
         return buildPlanVo(plan, wardrobe, null, products, false);
     }
@@ -647,7 +729,11 @@ public class OutfitRecommendationService {
                 new LambdaQueryWrapper<WardrobeItem>().eq(WardrobeItem::getUserId, userId));
         List<Long> ids = jsonUtils.toLongList(plan.getItemIds());
         List<WardrobeItem> involved = wardrobe.stream().filter(w -> ids.contains(w.getId())).collect(Collectors.toList());
-        preferenceService.reinforceStyleWeights(userId, involved, nextFav == 1 ? 0.05 : -0.02);
+        if (nextFav == 1) {
+            preferenceService.recordOutfitFeedback(userId, involved, null, 0.05, 0.06, 0.08);
+        } else {
+            preferenceService.recordOutfitFeedback(userId, null, involved, 0.02, 0.03, 0.04);
+        }
 
         List<OutfitDto.ProductVo> products = commerceMatchService.findByIds(jsonUtils.toLongList(plan.getRecommendedProductIds()));
         return buildPlanVo(plan, wardrobe, null, products, false);
@@ -662,8 +748,8 @@ public class OutfitRecommendationService {
                 .filter(w -> rejectedIds.contains(w.getId()))
                 .collect(Collectors.toList());
 
-        // Negative behavioral feedback loop: decay style_weights for rejected combination
-        preferenceService.reinforceStyleWeights(userId, involved, -0.05);
+        // Negative behavioral feedback loop: decay style, color, and pair affinities
+        preferenceService.recordOutfitFeedback(userId, null, involved, 0.05, 0.06, 0.08);
 
         OutfitDto.RecommendRequest regenReq = new OutfitDto.RecommendRequest();
         regenReq.setTriggerType(plan.getTriggerType() != null ? plan.getTriggerType() : "daily_weather");
@@ -747,7 +833,16 @@ public class OutfitRecommendationService {
             it.setUpdatedAt(LocalDateTime.now());
             wardrobeItemMapper.updateById(it);
         }
-        preferenceService.reinforceStyleWeights(userId, wornItems, 0.04);
+        int fbScore = entity.getFeedbackScore() != null ? entity.getFeedbackScore() : 5;
+        if (fbScore >= 5) {
+            preferenceService.recordOutfitFeedback(userId, wornItems, null, 0.06, 0.06, 0.10);
+        } else if (fbScore == 4) {
+            preferenceService.recordOutfitFeedback(userId, wornItems, null, 0.03, 0.03, 0.05);
+        } else if (fbScore <= 2) {
+            preferenceService.recordOutfitFeedback(userId, null, wornItems, 0.04, 0.05, 0.06);
+        } else {
+            preferenceService.recordOutfitFeedback(userId, wornItems, null, 0.01, 0.01, 0.02);
+        }
 
         Map<Long, WardrobeItem> itemMap = wornItems.stream().collect(Collectors.toMap(WardrobeItem::getId, i -> i));
         return toHistoryVo(entity, itemMap);
@@ -1377,13 +1472,56 @@ public class OutfitRecommendationService {
                     }
                     vtonPrompt.append("要求成图光影与衣褶物理贴合真实人体，不要擅自改动原单品的颜色、图案与版型，无文字、无拼贴框、无水印。");
 
+                    boolean wantQc = req == null || !Boolean.FALSE.equals(req.getEnableQualityCheck());
+                    String activePrompt = vtonPrompt.toString();
                     DashScopeVtonClient.VtonResult vtonRes = dashScopeVtonClient.runMultiImageTryOn(
                             creds.vtonApiKey(),
                             creds.vtonModel(),
                             personDataUri,
                             garmentInputs,
-                            vtonPrompt.toString()
+                            activePrompt
                     );
+
+                    QualityEvaluation qcEval = QualityEvaluation.skipped();
+                    int retryCount = 0;
+                    if (wantQc && creds.active() && creds.visionModel() != null && !creds.visionModel().isBlank()) {
+                        List<String> refUris = garmentInputs.stream()
+                                .map(DashScopeVtonClient.GarmentImageInput::imageDataOrUrl)
+                                .limit(3)
+                                .collect(Collectors.toList());
+                        List<String> garmentNames = garmentInputs.stream()
+                                .map(g -> g.slotLabel() + "「" + g.name() + "」")
+                                .collect(Collectors.toList());
+                        qcEval = evaluateTryOnResult(creds, personDataUri, refUris, garmentNames, vtonRes.imageBytes());
+                        if (qcEval.executed() && !qcEval.passed()) {
+                            String fixHint = (qcEval.correctionHint() != null && !qcEval.correctionHint().isBlank())
+                                    ? qcEval.correctionHint()
+                                    : String.join("；", qcEval.issues());
+                            String retryPrompt = vtonPrompt + "\n【重要质检修正，请严格避免上一版问题】" + fixHint;
+                            try {
+                                DashScopeVtonClient.VtonResult vtonRetry = dashScopeVtonClient.runMultiImageTryOn(
+                                        creds.vtonApiKey(),
+                                        creds.vtonModel(),
+                                        personDataUri,
+                                        garmentInputs,
+                                        retryPrompt
+                                );
+                                retryCount = 1;
+                                QualityEvaluation qcRetry = evaluateTryOnResult(
+                                        creds, personDataUri, refUris, garmentNames, vtonRetry.imageBytes());
+                                if (!qcRetry.executed() || qcRetry.score() >= qcEval.score()) {
+                                    vtonRes = vtonRetry;
+                                    activePrompt = retryPrompt;
+                                    if (qcRetry.executed()) {
+                                        qcEval = qcRetry;
+                                    }
+                                }
+                            } catch (Exception retryEx) {
+                                log.warn("VTON QC auto-retry failed ({}), keeping initial result", retryEx.getMessage());
+                            }
+                        }
+                    }
+
                     StorageService.StoredImage saved = storageService.storeGeneratedImageBytes(
                             userId, vtonRes.imageBytes(), "tryon_vton");
                     plan.setTryOnImageUrl(saved.url());
@@ -1410,9 +1548,19 @@ public class OutfitRecommendationService {
                             .bodyProfile(bodyProfileZh)
                             .sceneLabel(sceneLabelZh + " · 百炼多图实穿")
                             .pieces(pieceFeatures)
+                            .qualityCheckExecuted(qcEval.executed())
+                            .qualityCheckPassed(qcEval.executed() ? qcEval.passed() : null)
+                            .qualityScore(qcEval.executed() ? qcEval.score() : null)
+                            .qualityRetryCount(qcEval.executed() ? retryCount : null)
+                            .qualitySummary(qcEval.summary())
+                            .qualityIssues(qcEval.issues())
                             .build();
 
                     String appliedSummary = appliedLabels.isEmpty() ? "全套单品" : String.join("、", appliedLabels);
+                    String qcNotice = qcEval.executed()
+                            ? (retryCount > 0 ? "（已自动质检并重画优化：" + qcEval.score() + "分）"
+                            : "（已通过 VLM 质检：" + qcEval.score() + "分）")
+                            : "";
                     return OutfitDto.TryOnResultVo.builder()
                             .planId(planId)
                             .previewImageUrl(saved.url())
@@ -1420,9 +1568,9 @@ public class OutfitRecommendationService {
                             .usedReferencePhoto(true)
                             .modelUsed(vtonRes.modelUsed())
                             .endpointUsed("dashscope/" + vtonRes.modelUsed())
-                            .promptUsed(vtonPrompt.toString())
+                            .promptUsed(activePrompt)
                             .visualReport(vtonReport)
-                            .notice("已通过阿里云百炼多图试穿（" + vtonRes.modelUsed() + "）1:1 融合 " + appliedCount + " 件真实单品（" + appliedSummary + "），效果图已永久保存至本地")
+                            .notice("已通过阿里云百炼多图试穿（" + vtonRes.modelUsed() + "）1:1 融合 " + appliedCount + " 件真实单品（" + appliedSummary + "）" + qcNotice + "，效果图已永久保存至本地")
                             .build();
                 }
             } catch (Exception ex) {
@@ -1442,10 +1590,57 @@ public class OutfitRecommendationService {
             }
         }
 
+        boolean wantQcGeneral = req == null || !Boolean.FALSE.equals(req.getEnableQualityCheck());
         if (creds.active()) {
             try {
+                String activePrompt = prompt.toString();
                 MultimodalLlmClient.GeneratedImageResult gen = llmClient.generateEditorialTryOn(
-                        creds, prompt.toString(), refInputs, generationMode);
+                        creds, activePrompt, refInputs, generationMode);
+
+                QualityEvaluation qcEval = QualityEvaluation.skipped();
+                int retryCount = 0;
+                if (wantQcGeneral && gen.imageBytes() != null && gen.imageBytes().length > 100
+                        && creds.visionModel() != null && !creds.visionModel().isBlank()) {
+                    String personUri = usedRefPhoto && !refInputs.isEmpty()
+                            ? llmClient.toCompactVisionDataUri(refInputs.get(0).filename(), refInputs.get(0).mimeType(), refInputs.get(0).bytes())
+                            : null;
+                    int garmentStart = usedRefPhoto ? 1 : 0;
+                    List<String> gUris = new ArrayList<>();
+                    for (int i = garmentStart; i < refInputs.size() && gUris.size() < 3; i++) {
+                        String u = llmClient.toCompactVisionDataUri(refInputs.get(i).filename(), refInputs.get(i).mimeType(), refInputs.get(i).bytes());
+                        if (u != null) gUris.add(u);
+                    }
+                    List<String> gNames = pieceFeatures.stream()
+                            .map(pf -> pf.getSlotLabel() + "「" + pf.getName() + "」")
+                            .collect(Collectors.toList());
+                    qcEval = evaluateTryOnResult(creds, personUri, gUris, gNames, gen.imageBytes());
+                    if (qcEval.executed() && !qcEval.passed()) {
+                        String fixHint = (qcEval.correctionHint() != null && !qcEval.correctionHint().isBlank())
+                                ? qcEval.correctionHint()
+                                : String.join("; ", qcEval.issues());
+                        String retryPrompt = activePrompt + " CRITICAL FIX: " + fixHint;
+                        try {
+                            MultimodalLlmClient.GeneratedImageResult genRetry = llmClient.generateEditorialTryOn(
+                                    creds, retryPrompt, refInputs, generationMode);
+                            retryCount = 1;
+                            if (genRetry.imageBytes() != null && genRetry.imageBytes().length > 100) {
+                                QualityEvaluation qcRetry = evaluateTryOnResult(
+                                        creds, personUri, gUris, gNames, genRetry.imageBytes());
+                                if (!qcRetry.executed() || qcRetry.score() >= qcEval.score()) {
+                                    gen = genRetry;
+                                    activePrompt = retryPrompt;
+                                    if (qcRetry.executed()) qcEval = qcRetry;
+                                }
+                            } else {
+                                gen = genRetry;
+                                activePrompt = retryPrompt;
+                            }
+                        } catch (Exception retryEx) {
+                            log.warn("General try-on QC auto-retry failed ({}), keeping initial result", retryEx.getMessage());
+                        }
+                    }
+                }
+
                 String finalUrl;
                 if (gen.imageBytes() != null && gen.imageBytes().length > 100) {
                     StorageService.StoredImage saved = storageService.storeGeneratedImageBytes(userId, gen.imageBytes(), "tryon");
@@ -1471,6 +1666,12 @@ public class OutfitRecommendationService {
                         .bodyProfile(bodyProfileZh)
                         .sceneLabel(sceneLabelZh)
                         .pieces(pieceFeatures)
+                        .qualityCheckExecuted(qcEval.executed())
+                        .qualityCheckPassed(qcEval.executed() ? qcEval.passed() : null)
+                        .qualityScore(qcEval.executed() ? qcEval.score() : null)
+                        .qualityRetryCount(qcEval.executed() ? retryCount : null)
+                        .qualitySummary(qcEval.summary())
+                        .qualityIssues(qcEval.issues())
                         .build();
 
                 String noticeMsg;
@@ -1483,6 +1684,11 @@ public class OutfitRecommendationService {
                 } else {
                     noticeMsg = "已通过服务端生图接口（" + creds.imageModel() + " · " + gen.endpointUsed() + "）生成上身杂志预览图";
                 }
+                if (qcEval.executed()) {
+                    noticeMsg += retryCount > 0
+                            ? "；已完成 VLM 质检并自动重画（" + qcEval.score() + "分）"
+                            : "；已通过 VLM 质检（" + qcEval.score() + "分）";
+                }
                 if (vtonFallbackReason != null && !vtonFallbackReason.isBlank()) {
                     noticeMsg = vtonFallbackReason + "；" + noticeMsg;
                 }
@@ -1494,7 +1700,7 @@ public class OutfitRecommendationService {
                         .usedReferencePhoto(refApplied)
                         .modelUsed(creds.imageModel())
                         .endpointUsed(gen.endpointUsed())
-                        .promptUsed(prompt.toString())
+                        .promptUsed(activePrompt)
                         .visualReport(visualReport)
                         .notice(noticeMsg)
                         .build();
@@ -1565,6 +1771,124 @@ public class OutfitRecommendationService {
                 .visualReport(offlineReport)
                 .notice(offlineNotice)
                 .build();
+    }
+
+    private record QualityEvaluation(
+            boolean executed,
+            boolean passed,
+            int score,
+            String summary,
+            List<String> issues,
+            String correctionHint
+    ) {
+        static QualityEvaluation skipped() {
+            return new QualityEvaluation(false, true, 0, null, Collections.emptyList(), "");
+        }
+    }
+
+    private QualityEvaluation evaluateTryOnResult(AiConfigService.ResolvedAiCredentials creds,
+                                                  String personDataUri,
+                                                  List<String> garmentDataUris,
+                                                  List<String> garmentNames,
+                                                  byte[] generatedBytes) {
+        if (creds == null || !creds.active()
+                || creds.visionModel() == null || creds.visionModel().isBlank()
+                || generatedBytes == null || generatedBytes.length < 64) {
+            return QualityEvaluation.skipped();
+        }
+        try {
+            String generatedUri = llmClient.toCompactVisionDataUri("tryon_generated.jpg", "image/jpeg", generatedBytes);
+            if (generatedUri == null || generatedUri.isBlank()) {
+                return QualityEvaluation.skipped();
+            }
+            List<String> uris = new ArrayList<>();
+            StringBuilder checklist = new StringBuilder();
+            int imgNum = 1;
+            if (personDataUri != null && !personDataUri.isBlank()) {
+                uris.add(personDataUri);
+                checklist.append("- [图").append(imgNum++).append("] 为原模特参考图\n");
+            }
+            if (garmentDataUris != null) {
+                for (int i = 0; i < garmentDataUris.size() && uris.size() < 4; i++) {
+                    String gUri = garmentDataUris.get(i);
+                    if (gUri == null || gUri.isBlank()) continue;
+                    uris.add(gUri);
+                    String label = (garmentNames != null && i < garmentNames.size()) ? garmentNames.get(i) : ("单品" + (i + 1));
+                    checklist.append("- [图").append(imgNum++).append("] 为真实衣物参考图（").append(label).append("）\n");
+                }
+            }
+            if (uris.isEmpty()) {
+                return QualityEvaluation.skipped();
+            }
+            uris.add(generatedUri);
+            checklist.append("- [图").append(imgNum).append("] 为 AI 生成待验收的试穿成图\n");
+            if (garmentNames != null && !garmentNames.isEmpty()) {
+                checklist.append("本套应当穿在身上的核心单品列表：").append(String.join("、", garmentNames)).append("。");
+            }
+
+            JsonNode res = llmClient.verifyTryOnQuality(creds, checklist.toString(), uris);
+            if (res == null || res.isMissingNode() || res.isNull()) {
+                return QualityEvaluation.skipped();
+            }
+            int score = Math.max(0, Math.min(100, res.path("score").asInt(85)));
+            boolean rawPassed = res.path("passed").asBoolean(score >= 72);
+            boolean passed = rawPassed && score >= 72;
+            String summary = res.path("summary").asText("").trim();
+            if (summary.isBlank()) {
+                summary = passed ? "人物一致性与单品还原度良好" : "成图与原单品存在一定偏差";
+            }
+            List<String> issues = readStringArray(res.path("issues"), 4);
+            String correctionHint = res.path("correctionHint").asText("").trim();
+            return new QualityEvaluation(true, passed, score, summary, issues, correctionHint);
+        } catch (Exception e) {
+            log.warn("VLM try-on quality check skipped due to error: {}", e.getMessage());
+            return QualityEvaluation.skipped();
+        }
+    }
+
+    private List<WardrobeItem> selectDiverseContactSheetItems(List<ScoredItem> scored,
+                                                              WardrobeItem anchor,
+                                                              int temp,
+                                                              int maxCount) {
+        List<WardrobeItem> selected = new ArrayList<>();
+        Set<Long> seenIds = new LinkedHashSet<>();
+        if (anchor != null && anchor.getId() != null && seenIds.add(anchor.getId())) {
+            selected.add(anchor);
+        }
+        Map<String, Integer> quotas = new LinkedHashMap<>();
+        quotas.put("top", 2);
+        quotas.put("bottom", 2);
+        quotas.put("shoes", 2);
+        quotas.put("outerwear", temp < 25 ? 2 : 1);
+        quotas.put("accessory", 1);
+
+        for (Map.Entry<String, Integer> entry : quotas.entrySet()) {
+            String cat = entry.getKey();
+            int need = entry.getValue();
+            int have = (int) selected.stream()
+                    .filter(w -> cat.equalsIgnoreCase(w.getCategory()) || ("top".equals(cat) && "dress".equalsIgnoreCase(w.getCategory())))
+                    .count();
+            for (ScoredItem si : scored) {
+                if (selected.size() >= maxCount || have >= need) break;
+                WardrobeItem w = si.item;
+                if (w.getId() == null || seenIds.contains(w.getId())) continue;
+                boolean catMatch = cat.equalsIgnoreCase(w.getCategory())
+                        || ("top".equals(cat) && "dress".equalsIgnoreCase(w.getCategory()));
+                if (catMatch) {
+                    selected.add(w);
+                    seenIds.add(w.getId());
+                    have++;
+                }
+            }
+        }
+        for (ScoredItem si : scored) {
+            if (selected.size() >= maxCount) break;
+            WardrobeItem w = si.item;
+            if (w.getId() != null && seenIds.add(w.getId())) {
+                selected.add(w);
+            }
+        }
+        return selected;
     }
 
     private String firstNonBlank(String... values) {

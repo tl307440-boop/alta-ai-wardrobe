@@ -76,6 +76,7 @@ public class OutfitDto {
         private String modelPreset;       // "user" | "/alta/models/female-1.jpg" | ...
         private String upperGarmentPreference; // "auto" | "outerwear" | "top"
         private String clientOrigin;      // browser origin e.g. http://47.111.163.151:8680
+        private Boolean enableQualityCheck = true;
     }
 
     @Data
@@ -110,6 +111,12 @@ public class OutfitDto {
         private String bodyProfile;
         private String sceneLabel;
         private List<VisualPieceFeatureVo> pieces;
+        private Boolean qualityCheckExecuted;
+        private Boolean qualityCheckPassed;
+        private Integer qualityScore;
+        private Integer qualityRetryCount;
+        private String qualitySummary;
+        private List<String> qualityIssues;
     }
 
     @Data

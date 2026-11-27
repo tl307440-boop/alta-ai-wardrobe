@@ -3,8 +3,14 @@ package com.wardrobe;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wardrobe.service.AiConfigService;
+import com.wardrobe.service.OutfitContactSheetService;
+import com.wardrobe.service.OutfitRecommendationService;
+import com.wardrobe.service.PreferenceService;
 import com.wardrobe.service.SeedDataInitializer;
 import com.wardrobe.service.StorageService;
+import com.wardrobe.mapper.WardrobeItemMapper;
+import com.wardrobe.model.entity.UserPreference;
+import com.wardrobe.model.entity.WardrobeItem;
 import com.wardrobe.service.client.DashScopeVtonClient;
 import com.wardrobe.service.client.MultimodalLlmClient;
 import org.junit.jupiter.api.Test;
@@ -49,6 +55,18 @@ class AiWardrobeIntegrationTest {
 
     @Autowired
     private SeedDataInitializer seedDataInitializer;
+
+    @Autowired
+    private OutfitRecommendationService outfitRecommendationService;
+
+    @Autowired
+    private OutfitContactSheetService outfitContactSheetService;
+
+    @Autowired
+    private PreferenceService preferenceService;
+
+    @Autowired
+    private WardrobeItemMapper wardrobeItemMapper;
 
     @MockBean
     private MultimodalLlmClient llmClient;
@@ -1099,5 +1117,203 @@ class AiWardrobeIntegrationTest {
         JsonNode itemsAfter = objectMapper.readTree(
                 resAfter.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).path("data");
         assertThat(itemsAfter.size()).isEqualTo(countBefore);
+    }
+
+    @Test
+    void testMultiplicativeScoringFeedbackLearningAnd12TileContactSheet() throws Exception {
+        String username = "score_learn_" + System.currentTimeMillis();
+        MvcResult regRes = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", username,
+                                "password", "TestPass123!",
+                                "nickname", "ScoreLearner",
+                                "loadStarterPack", true
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode regData = objectMapper.readTree(regRes.getResponse().getContentAsString()).path("data");
+        String token = regData.path("token").asText();
+        long userId = regData.path("userInfo").path("id").asLong();
+
+        // Add extra items so user has >= 15 items (> 12) + verify disliked color hard veto
+        for (int i = 1; i <= 10; i++) {
+            mockMvc.perform(post("/api/wardrobe/items")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of(
+                                    "name", "极简基础单品" + i,
+                                    "category", i % 2 == 0 ? "bottom" : "top",
+                                    "color", "燕麦",
+                                    "colorHex", "#DFD3C3",
+                                    "season", "spring,autumn",
+                                    "thickness", 2,
+                                    "styleTags", List.of("极简通勤"),
+                                    "processedImageUrl", "svg://shirt"
+                            ))))
+                    .andExpect(status().isOk());
+        }
+        for (Map.Entry<String, String> extra : List.of(
+                Map.entry("荧光绿通勤衬衫", "荧光绿"),
+                Map.entry("米白针织小背心", "米白")
+        )) {
+            mockMvc.perform(post("/api/wardrobe/items")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of(
+                                    "name", extra.getKey(),
+                                    "category", "top",
+                                    "color", extra.getValue(),
+                                    "colorHex", "荧光绿".equals(extra.getValue()) ? "#39FF14" : "#FAF6EE",
+                                    "season", "spring,autumn",
+                                    "thickness", 2,
+                                    "styleTags", List.of("极简通勤", "Clean Fit"),
+                                    "processedImageUrl", "svg://shirt"
+                            ))))
+                    .andExpect(status().isOk());
+        }
+
+        List<WardrobeItem> wardrobe = wardrobeItemMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WardrobeItem>()
+                        .eq(WardrobeItem::getUserId, userId));
+        assertThat(wardrobe.size()).isGreaterThanOrEqualTo(13);
+
+        // 12-tile contact sheet limit verification
+        OutfitContactSheetService.ContactSheet sheet = outfitContactSheetService.buildContactSheet(userId, wardrobe);
+        assertThat(sheet).isNotNull();
+        assertThat(sheet.totalTiles()).isLessThanOrEqualTo(12);
+        assertThat(sheet.dataUri()).startsWith("data:image/jpeg;base64,");
+
+        // Multiplicative colorGate must suppress explicit disliked color ("荧光绿") far below matching top
+        UserPreference pref = preferenceService.getOrCreateEntity(userId);
+        List<OutfitRecommendationService.ScoredItem> initialScored = outfitRecommendationService.scoreWardrobeItems(
+                wardrobe, pref, 18, "职场通勤", Map.of(), false, java.util.Set.of());
+        double neonScore = initialScored.stream()
+                .filter(s -> "荧光绿通勤衬衫".equals(s.item().getName()))
+                .findFirst().orElseThrow().score();
+        double creamScore = initialScored.stream()
+                .filter(s -> "米白针织小背心".equals(s.item().getName()))
+                .findFirst().orElseThrow().score();
+        assertThat(neonScore).isLessThan(creamScore * 0.45);
+
+        // Trigger recommendation + favorite -> verifies learned_color_scores and learned_pair_scores persist
+        MvcResult recRes = mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "daily_weather",
+                                "weatherTemp", 18
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        long planId = objectMapper.readTree(recRes.getResponse().getContentAsString()).path("data").path("id").asLong();
+
+        mockMvc.perform(patch("/api/outfit/plans/" + planId + "/favorite")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.favorite").value(true));
+
+        UserPreference updatedPref = preferenceService.getOrCreateEntity(userId);
+        assertThat(updatedPref.getLearnedColorScores()).isNotBlank();
+        assertThat(updatedPref.getLearnedPairScores()).isNotBlank();
+        assertThat(updatedPref.getLearnedPairScores()).contains("_");
+    }
+
+    @Test
+    void testTryOnVlmQualityGateAutoRetryAndOptOut() throws Exception {
+        String username = "vton_qc_" + System.currentTimeMillis();
+        MvcResult regRes = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", username,
+                                "password", "TestPass123!",
+                                "nickname", "QcTester",
+                                "loadStarterPack", true
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = regRes.getResponse().getContentAsString();
+        token = objectMapper.readTree(token).path("data").path("token").asText();
+
+        mockMvc.perform(put("/api/ai-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "providerName", "dashscope",
+                                "baseUrl", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                                "apiKey", "sk-dashscope-qc-1234567890",
+                                "visionModel", "qwen-vl-max",
+                                "chatModel", "qwen-plus",
+                                "enabled", true,
+                                "vtonEnabled", true,
+                                "vtonModel", "qwen-image-2.1-pro"
+                        ))))
+                .andExpect(status().isOk());
+
+        MvcResult recRes = mockMvc.perform(post("/api/outfit/recommend")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "triggerType", "daily_weather",
+                                "weatherTemp", 18
+                        ))))
+                .andExpect(status().isOk())
+                .andReturn();
+        long planId = objectMapper.readTree(recRes.getResponse().getContentAsString()).path("data").path("id").asLong();
+
+        java.util.List<String> capturedPrompts = new java.util.ArrayList<>();
+        org.mockito.Mockito.reset(dashScopeVtonClient, llmClient);
+        when(llmClient.toCompactVisionDataUri(anyString(), anyString(), any()))
+                .thenReturn("data:image/jpeg;base64,/9j/4AAQSkZJRg==");
+        when(dashScopeVtonClient.runMultiImageTryOn(anyString(), anyString(), anyString(), anyList(), anyString()))
+                .thenAnswer(inv -> {
+                    capturedPrompts.add(inv.getArgument(4));
+                    byte[] fakeOut = new byte[160];
+                    System.arraycopy(VALID_PNG_BYTES, 0, fakeOut, 0, VALID_PNG_BYTES.length);
+                    return new DashScopeVtonClient.VtonResult(fakeOut, "https://oss.example/qc.png", "qc-task", "qwen-image-2.1-pro");
+                });
+
+        JsonNode qcFailNode = objectMapper.readTree("""
+                {"passed":false,"score":55,"summary":"下装色彩偏差","issues":["裤子颜色变浅"],"correctionHint":"保持炭黑微喇裤"}
+                """);
+        JsonNode qcPassNode = objectMapper.readTree("""
+                {"passed":true,"score":92,"summary":"人物一致且单品高度还原","issues":[],"correctionHint":""}
+                """);
+        when(llmClient.verifyTryOnQuality(any(), anyString(), anyList()))
+                .thenReturn(qcFailNode)
+                .thenReturn(qcPassNode);
+
+        mockMvc.perform(post("/api/outfit/plans/" + planId + "/try-on")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "modelPreset", "/alta/models/female-1.jpg",
+                                "enableQualityCheck", true
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.visualReport.qualityCheckExecuted").value(true))
+                .andExpect(jsonPath("$.data.visualReport.qualityCheckPassed").value(true))
+                .andExpect(jsonPath("$.data.visualReport.qualityScore").value(92))
+                .andExpect(jsonPath("$.data.visualReport.qualityRetryCount").value(1));
+
+        assertThat(capturedPrompts).hasSize(2);
+        assertThat(capturedPrompts.get(1)).contains("保持炭黑微喇裤");
+
+        // Opt-out case: enableQualityCheck=false must skip VLM quality verification and call VTON only once
+        org.mockito.Mockito.clearInvocations(dashScopeVtonClient, llmClient);
+        mockMvc.perform(post("/api/outfit/plans/" + planId + "/try-on")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "modelPreset", "/alta/models/female-1.jpg",
+                                "enableQualityCheck", false
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.visualReport.qualityCheckExecuted").value(false));
+
+        org.mockito.Mockito.verify(dashScopeVtonClient, org.mockito.Mockito.times(1))
+                .runMultiImageTryOn(anyString(), anyString(), anyString(), anyList(), anyString());
+        org.mockito.Mockito.verify(llmClient, org.mockito.Mockito.never())
+                .verifyTryOnQuality(any(), anyString(), anyList());
     }
 }

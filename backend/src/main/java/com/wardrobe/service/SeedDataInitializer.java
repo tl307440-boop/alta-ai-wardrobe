@@ -72,6 +72,8 @@ public class SeedDataInitializer implements ApplicationRunner {
         ensureColumn("user_ai_config", "vton_api_key_encrypted", "TEXT DEFAULT NULL");
         ensureColumn("user_ai_config", "vton_api_key_masked", "VARCHAR(100) DEFAULT NULL");
         ensureColumn("user_ai_config", "vton_public_base_url", "VARCHAR(500) DEFAULT NULL");
+        ensureColumn("user_preference", "learned_color_scores", "TEXT DEFAULT NULL");
+        ensureColumn("user_preference", "learned_pair_scores", "TEXT DEFAULT NULL");
     }
 
     private void ensureColumn(String table, String column, String definition) {

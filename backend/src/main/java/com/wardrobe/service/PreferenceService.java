@@ -426,15 +426,157 @@ public class PreferenceService {
         if (tags == null || tags.isEmpty()) return;
         UserPreference pref = getOrCreateEntity(userId);
         Map<String, Double> weights = new LinkedHashMap<>(jsonUtils.toDoubleMap(pref.getStyleWeights()));
+        applyStyleDelta(weights, tags, delta);
+        pref.setStyleWeights(jsonUtils.toJson(weights));
+        pref.setUpdatedAt(LocalDateTime.now());
+        preferenceMapper.updateById(pref);
+    }
+
+    /**
+     * Records multi-signal outfit feedback across style weights, learned color affinity, and pairwise garment scores.
+     */
+    public void recordOutfitFeedback(Long userId,
+                                     List<WardrobeItem> positiveItems,
+                                     List<WardrobeItem> negativeItems,
+                                     double styleDelta,
+                                     double colorDelta,
+                                     double pairDelta) {
+        if ((positiveItems == null || positiveItems.isEmpty()) && (negativeItems == null || negativeItems.isEmpty())) {
+            return;
+        }
+        UserPreference pref = getOrCreateEntity(userId);
+        Map<String, Double> weights = new LinkedHashMap<>(jsonUtils.toDoubleMap(pref.getStyleWeights()));
+        Map<String, Double> colorScores = new LinkedHashMap<>(jsonUtils.toDoubleMap(pref.getLearnedColorScores()));
+        Map<String, Double> pairScores = new LinkedHashMap<>(jsonUtils.toDoubleMap(pref.getLearnedPairScores()));
+
+        if (positiveItems != null && !positiveItems.isEmpty()) {
+            applyItemsFeedback(positiveItems, weights, colorScores, pairScores,
+                    Math.abs(styleDelta), Math.abs(colorDelta), Math.abs(pairDelta));
+        }
+        if (negativeItems != null && !negativeItems.isEmpty()) {
+            applyItemsFeedback(negativeItems, weights, colorScores, pairScores,
+                    -Math.abs(styleDelta), -Math.abs(colorDelta), -Math.abs(pairDelta));
+        }
+
+        persistLearnedPreferences(pref, weights, colorScores, pairScores);
+    }
+
+    /**
+     * Learns targeted preference shifts when a user swaps out one slot item in favor of another within an outfit.
+     */
+    public void recordSlotSwapFeedback(Long userId,
+                                       WardrobeItem rejectedItem,
+                                       WardrobeItem chosenItem,
+                                       List<WardrobeItem> keptContextItems) {
+        if (rejectedItem == null && chosenItem == null) {
+            return;
+        }
+        UserPreference pref = getOrCreateEntity(userId);
+        Map<String, Double> weights = new LinkedHashMap<>(jsonUtils.toDoubleMap(pref.getStyleWeights()));
+        Map<String, Double> colorScores = new LinkedHashMap<>(jsonUtils.toDoubleMap(pref.getLearnedColorScores()));
+        Map<String, Double> pairScores = new LinkedHashMap<>(jsonUtils.toDoubleMap(pref.getLearnedPairScores()));
+
+        if (rejectedItem != null) {
+            applyStyleDelta(weights, jsonUtils.toStringList(rejectedItem.getStyleTags()), -0.02);
+            applyColorDelta(colorScores, rejectedItem.getColor(), -0.03);
+            if (keptContextItems != null && rejectedItem.getId() != null) {
+                for (WardrobeItem ctx : keptContextItems) {
+                    if (ctx != null && ctx.getId() != null && !Objects.equals(ctx.getId(), rejectedItem.getId())) {
+                        applyPairDelta(pairScores, rejectedItem.getId(), ctx.getId(), -0.05);
+                    }
+                }
+            }
+        }
+        if (chosenItem != null) {
+            applyStyleDelta(weights, jsonUtils.toStringList(chosenItem.getStyleTags()), 0.03);
+            applyColorDelta(colorScores, chosenItem.getColor(), 0.04);
+            if (keptContextItems != null && chosenItem.getId() != null) {
+                for (WardrobeItem ctx : keptContextItems) {
+                    if (ctx != null && ctx.getId() != null && !Objects.equals(ctx.getId(), chosenItem.getId())) {
+                        applyPairDelta(pairScores, chosenItem.getId(), ctx.getId(), 0.06);
+                    }
+                }
+            }
+        }
+
+        persistLearnedPreferences(pref, weights, colorScores, pairScores);
+    }
+
+    private void applyItemsFeedback(List<WardrobeItem> items,
+                                    Map<String, Double> weights,
+                                    Map<String, Double> colorScores,
+                                    Map<String, Double> pairScores,
+                                    double styleDelta,
+                                    double colorDelta,
+                                    double pairDelta) {
+        for (WardrobeItem item : items) {
+            if (item == null) continue;
+            applyStyleDelta(weights, jsonUtils.toStringList(item.getStyleTags()), styleDelta);
+            applyColorDelta(colorScores, item.getColor(), colorDelta);
+        }
+        if (Math.abs(pairDelta) > 1e-6 && items.size() >= 2) {
+            for (int i = 0; i < items.size(); i++) {
+                WardrobeItem a = items.get(i);
+                if (a == null || a.getId() == null) continue;
+                for (int j = i + 1; j < items.size(); j++) {
+                    WardrobeItem b = items.get(j);
+                    if (b == null || b.getId() == null || Objects.equals(a.getId(), b.getId())) continue;
+                    applyPairDelta(pairScores, a.getId(), b.getId(), pairDelta);
+                }
+            }
+        }
+    }
+
+    private void applyStyleDelta(Map<String, Double> weights, List<String> tags, double delta) {
+        if (tags == null || tags.isEmpty() || Math.abs(delta) < 1e-6) return;
         for (String tag : tags) {
             if (tag == null || tag.isBlank()) continue;
             double current = weights.getOrDefault(tag, 0.55);
             double next = Math.max(0.10, Math.min(1.0, Math.round((current + delta) * 100.0) / 100.0));
             weights.put(tag, next);
         }
+    }
+
+    private void applyColorDelta(Map<String, Double> colorScores, String color, double delta) {
+        if (color == null || color.isBlank() || Math.abs(delta) < 1e-6) return;
+        String key = color.trim();
+        double current = colorScores.getOrDefault(key, 0.0);
+        double next = Math.max(-0.50, Math.min(0.50, Math.round((current + delta) * 100.0) / 100.0));
+        colorScores.put(key, next);
+    }
+
+    private void applyPairDelta(Map<String, Double> pairScores, Long idA, Long idB, double delta) {
+        String key = pairKey(idA, idB);
+        if (key == null) return;
+        double current = pairScores.getOrDefault(key, 0.0);
+        double next = Math.max(-0.40, Math.min(0.40, Math.round((current + delta) * 100.0) / 100.0));
+        pairScores.put(key, next);
+    }
+
+    private void persistLearnedPreferences(UserPreference pref,
+                                           Map<String, Double> weights,
+                                           Map<String, Double> colorScores,
+                                           Map<String, Double> pairScores) {
+        Map<String, Double> boundedPairs = pairScores.entrySet().stream()
+                .filter(e -> e.getValue() != null && Math.abs(e.getValue()) >= 0.005)
+                .sorted((a, b) -> Double.compare(Math.abs(b.getValue()), Math.abs(a.getValue())))
+                .limit(120)
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (a, b) -> a,
+                        LinkedHashMap::new
+                ));
         pref.setStyleWeights(jsonUtils.toJson(weights));
+        pref.setLearnedColorScores(jsonUtils.toJson(colorScores));
+        pref.setLearnedPairScores(jsonUtils.toJson(boundedPairs));
         pref.setUpdatedAt(LocalDateTime.now());
         preferenceMapper.updateById(pref);
+    }
+
+    public static String pairKey(Long idA, Long idB) {
+        if (idA == null || idB == null || Objects.equals(idA, idB)) return null;
+        return Math.min(idA, idB) + "_" + Math.max(idA, idB);
     }
 
     private static class ColorBucket {
