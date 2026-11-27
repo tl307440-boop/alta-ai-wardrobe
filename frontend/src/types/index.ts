@@ -235,6 +235,12 @@ export interface TryOnVisualReport {
   bodyProfile: string;
   sceneLabel: string;
   pieces: VisualPieceFeature[];
+  qualityCheckExecuted?: boolean;
+  qualityCheckPassed?: boolean;
+  qualityScore?: number;
+  qualityRetryCount?: number;
+  qualitySummary?: string | null;
+  qualityIssues?: string[];
 }
 
 export interface TryOnResult {

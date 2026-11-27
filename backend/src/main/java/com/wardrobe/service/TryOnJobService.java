@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class TryOnJobService {
-    private static final int STALE_JOB_MINUTES = 4;
+    private static final int STALE_JOB_MINUTES = 6;
 
     private final TryOnJobMapper tryOnJobMapper;
     private final OutfitRecommendationService outfitRecommendationService;

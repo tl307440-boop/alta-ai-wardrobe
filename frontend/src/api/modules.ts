@@ -163,6 +163,7 @@ export const outfitApi = {
       modelPreset?: string;
       upperGarmentPreference?: 'auto' | 'outerwear' | 'top';
       clientOrigin?: string;
+      enableQualityCheck?: boolean;
     }
   ) =>
     unwrap<TryOnResult>(
@@ -178,6 +179,7 @@ export const outfitApi = {
       modelPreset?: string;
       upperGarmentPreference?: 'auto' | 'outerwear' | 'top';
       clientOrigin?: string;
+      enableQualityCheck?: boolean;
     }
   ) => unwrap<TryOnJob>(http.post(`/outfit/plans/${planId}/try-on/jobs`, payload || {})),
   listTryOnJobs: (planId?: number, limit = 18) =>

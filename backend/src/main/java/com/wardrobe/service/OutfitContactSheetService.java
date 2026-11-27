@@ -51,12 +51,12 @@ public class OutfitContactSheetService {
         if (candidates == null || candidates.isEmpty()) {
             return null;
         }
-        List<WardrobeItem> tiles = candidates.size() > 16 ? candidates.subList(0, 16) : candidates;
+        List<WardrobeItem> tiles = candidates.size() > 12 ? candidates.subList(0, 12) : candidates;
         int n = tiles.size();
-        int cols = n <= 4 ? 2 : (n <= 9 ? 3 : 4);
+        int cols = n <= 4 ? 2 : 3;
         int rows = (int) Math.ceil((double) n / cols);
-        int tileW = 1024 / cols;
-        int tileH = 1024 / cols;
+        int tileW = cols == 2 ? 480 : 340;
+        int tileH = tileW;
         int canvasW = tileW * cols;
         int canvasH = tileH * rows;
 
@@ -165,8 +165,8 @@ public class OutfitContactSheetService {
     private BufferedImage loadGarmentImage(Long userId, WardrobeItem item) {
         String[] urls = { item.getProcessedImageUrl(), item.getOriginalImageUrl() };
         for (String url : urls) {
-            if (url == null || !url.startsWith("/uploads/user_" + userId + "/")) continue;
-            StorageService.StoredImage stored = storageService.readUserLocalUpload(userId, url);
+            if (url == null || url.isBlank() || url.trim().startsWith("svg://")) continue;
+            StorageService.StoredImage stored = storageService.readGarmentImageForAi(userId, url);
             if (stored == null || stored.bytes() == null) continue;
             try {
                 BufferedImage img = ImageIO.read(new ByteArrayInputStream(stored.bytes()));
@@ -174,7 +174,7 @@ public class OutfitContactSheetService {
                     return img;
                 }
             } catch (Exception ignored) {
-                // Non-JDK format (e.g. WebP) falls back to swatch tile cleanly
+                // Non-JDK format falls back to swatch tile cleanly
             }
         }
         return null;

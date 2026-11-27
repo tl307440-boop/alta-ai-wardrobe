@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS `user_preference` (
   `preferred_scenes` TEXT DEFAULT NULL,
   `budget_limit` DECIMAL(10,2) NOT NULL DEFAULT 300.00,
   `style_weights` TEXT DEFAULT NULL,
+  `learned_color_scores` TEXT DEFAULT NULL,
+  `learned_pair_scores` TEXT DEFAULT NULL,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_pref_user_id` (`user_id`),
@@ -197,3 +199,5 @@ ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_model` VARCHAR(100) 
 ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_api_key_encrypted` TEXT DEFAULT NULL;
 ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_api_key_masked` VARCHAR(100) DEFAULT NULL;
 ALTER TABLE `user_ai_config` ADD COLUMN IF NOT EXISTS `vton_public_base_url` VARCHAR(500) DEFAULT NULL;
+ALTER TABLE `user_preference` ADD COLUMN IF NOT EXISTS `learned_color_scores` TEXT DEFAULT NULL;
+ALTER TABLE `user_preference` ADD COLUMN IF NOT EXISTS `learned_pair_scores` TEXT DEFAULT NULL;

@@ -130,31 +130,13 @@ const matchLevel = computed(() => {
 });
 
 const hasActiveCustomSetting = computed(
-  () => lookbookStore.reviveIdle || !wardrobeStore.usingLiveWeather
+  () => lookbookStore.reviveIdle || Number(lookbookStore.budget) !== 300
 );
 
-async function setTriggerMode(mode: 'weather' | 'nl' | 'anchor') {
-  if (lookbookStore.loading) return;
+function setTriggerMode(mode: 'weather' | 'nl' | 'anchor') {
   lookbookStore.triggerMode = mode;
-  if (mode === 'weather') {
-    activeTriggerBusy.value = 'weather';
-    try {
-      await lookbookStore.generateRecommendation({ triggerType: 'daily_weather' });
-    } catch (e: any) {
-      toast.show(e?.message || '切换天气搭配失败');
-    } finally {
-      activeTriggerBusy.value = null;
-    }
-  } else if (mode === 'anchor' && anchorItem.value) {
-    lookbookStore.anchorItemId = anchorItem.value.id;
-    activeTriggerBusy.value = 'anchor';
-    try {
-      await lookbookStore.generateRecommendation({ triggerType: 'anchor_item', anchorItemId: anchorItem.value.id });
-    } catch (e: any) {
-      toast.show(e?.message || '生成单品核心搭配失败');
-    } finally {
-      activeTriggerBusy.value = null;
-    }
+  if (mode === 'anchor' && !lookbookStore.anchorItemId && wardrobeStore.items.length > 0) {
+    lookbookStore.anchorItemId = wardrobeStore.items[0].id;
   }
 }
 
@@ -162,30 +144,37 @@ async function selectLiveWeather() {
   if (lookbookStore.loading || weatherBusyKey.value) return;
   weatherBusyKey.value = 'live';
   try {
-    await wardrobeStore.useLiveWeather(true);
-    lookbookStore.triggerMode = 'weather';
-    await lookbookStore.generateRecommendation({ triggerType: 'daily_weather' });
+    await wardrobeStore.useLiveWeather(false);
     const w = wardrobeStore.activeWeather;
-    toast.show(`已切换至「${w.city}」实时天气 (${w.condition} ${w.temp}°C)`);
+    toast.show(`已选择「${w.city}」实时天气 (${w.condition} ${w.temp}°C)，点击「按此天气生成搭配」生效`);
   } catch (e: any) {
-    toast.show(e?.message || '切换实时天气失败');
+    toast.show(e?.message || '获取实时天气失败');
   } finally {
     weatherBusyKey.value = null;
   }
 }
 
-async function selectWeatherPreset(idx: number) {
+function selectWeatherPreset(idx: number) {
   if (lookbookStore.loading || weatherBusyKey.value) return;
-  weatherBusyKey.value = `preset-${idx}`;
+  wardrobeStore.selectWeatherPreset(idx);
+  toast.show(`已切换模拟天气：${WEATHER_PRESETS[idx].label} (${WEATHER_PRESETS[idx].temp}°C)，点击「按此天气生成搭配」生效`);
+}
+
+async function generateWeatherLook() {
+  if (lookbookStore.loading) return;
+  lookbookStore.triggerMode = 'weather';
+  activeTriggerBusy.value = 'weather';
   try {
-    wardrobeStore.selectWeatherPreset(idx);
-    lookbookStore.triggerMode = 'weather';
-    await lookbookStore.generateRecommendation({ triggerType: 'daily_weather' });
-    toast.show(`已切换模拟场景：${WEATHER_PRESETS[idx].label} (${WEATHER_PRESETS[idx].temp}°C)`);
+    await lookbookStore.generateRecommendation({
+      triggerType: 'daily_weather',
+      anchorItemId: null,
+    });
+    const w = wardrobeStore.activeWeather;
+    toast.show(`已按「${w.city} ${w.condition} ${w.temp}°C」生成今日穿搭`);
   } catch (e: any) {
-    toast.show(e?.message || '切换模拟天气失败');
+    toast.show(e?.message || '按天气生成搭配失败');
   } finally {
-    weatherBusyKey.value = null;
+    activeTriggerBusy.value = null;
   }
 }
 
@@ -198,6 +187,7 @@ async function generateNLLook() {
     await lookbookStore.generateRecommendation({
       triggerType: 'nl_query',
       userQuery: lookbookStore.nlQuery,
+      anchorItemId: null,
     });
     toast.show('已按你的场景要求生成专属穿搭');
   } catch (e: any) {
@@ -218,19 +208,37 @@ async function applyQuickScenario(sc: (typeof QUICK_SCENARIOS)[number]) {
   }
 }
 
-async function changeAnchorById(id: number) {
+function selectAnchorDraft(id: number) {
   if (lookbookStore.loading) return;
   lookbookStore.anchorItemId = id;
+}
+
+async function generateAnchorLook() {
+  if (lookbookStore.loading || !anchorItem.value) return;
+  lookbookStore.triggerMode = 'anchor';
+  lookbookStore.anchorItemId = anchorItem.value.id;
   activeTriggerBusy.value = 'anchor';
   try {
-    await lookbookStore.generateRecommendation({ triggerType: 'anchor_item', anchorItemId: id });
-    const item = wardrobeStore.items.find((i) => i.id === id);
-    if (item) toast.show(`已锁定核心单品「${item.name}」`);
+    await lookbookStore.generateRecommendation({
+      triggerType: 'anchor_item',
+      anchorItemId: anchorItem.value.id,
+    });
+    toast.show(`已围绕「${anchorItem.value.name}」生成全套搭配`);
   } catch (e: any) {
-    toast.show(e?.message || '切换核心单品失败');
+    toast.show(e?.message || '生成单品核心搭配失败');
   } finally {
     activeTriggerBusy.value = null;
   }
+}
+
+function handleToggleSlotLock(item: { id: number; name: string }) {
+  if (!item?.id || item.id <= 0) return;
+  const locked = lookbookStore.toggleSlotLock(item.id);
+  toast.show(
+    locked
+      ? `已锁定「${item.name}」（一句话微调时优先保留）`
+      : `已取消锁定「${item.name}」，现在可随时点「换一件」替换`
+  );
 }
 
 async function handleSwapSlot(slotKey: string, currentItemId: number) {
@@ -309,24 +317,14 @@ async function handleDislikePlan() {
   }
 }
 
-async function handleToggleReviveIdle() {
+function handleToggleReviveIdle() {
   if (lookbookStore.loading || togglingReviveIdle.value) return;
-  togglingReviveIdle.value = true;
   lookbookStore.reviveIdle = !lookbookStore.reviveIdle;
-  try {
-    await lookbookStore.generateRecommendation({
-      reviveIdle: lookbookStore.reviveIdle,
-    });
-    toast.show(
-      lookbookStore.reviveIdle
-        ? '已开启「盘活闲置」：优先把少穿的单品搭出门'
-        : '已关闭盘活闲置模式'
-    );
-  } catch (e: any) {
-    toast.show(e?.message || '切换盘活闲置模式失败');
-  } finally {
-    togglingReviveIdle.value = false;
-  }
+  toast.show(
+    lookbookStore.reviveIdle
+      ? '已开启「盘活闲置」，点击「生成搭配」将优先搭少穿单品'
+      : '已关闭盘活闲置模式'
+  );
 }
 
 async function handleRecordToday() {
@@ -405,6 +403,55 @@ async function handleRecordToday() {
         </button>
       </div>
 
+      <!-- Mode 1: Weather Confirmation Strip (User picks real/simulated weather, then explicitly generates) -->
+      <div v-if="lookbookStore.triggerMode === 'weather'" class="pt-2.5 border-t border-black/[0.06] flex flex-wrap items-center justify-between gap-2.5">
+        <div class="flex flex-wrap items-center gap-1.5 text-[12px]">
+          <span class="text-[#666666] mr-0.5">当前选用天气</span>
+          <button
+            type="button"
+            @click="selectLiveWeather"
+            :disabled="lookbookStore.loading || weatherBusyKey !== null"
+            class="px-3 py-1 rounded-full font-medium border transition inline-flex items-center gap-1.5 disabled:opacity-55 disabled:cursor-not-allowed"
+            :class="
+              wardrobeStore.usingLiveWeather
+                ? 'bg-black border-black text-white'
+                : 'bg-[#FAFAFA] border-black/[0.08] text-[#333333] hover:border-black/30'
+            "
+          >
+            <AppIcon v-if="weatherBusyKey === 'live'" name="loader" :size="12" class="animate-spin" />
+            <span v-else class="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            {{ wardrobeStore.liveWeather.city }} 实时 {{ wardrobeStore.liveWeather.condition }} {{ wardrobeStore.liveWeather.temp }}°C
+          </button>
+          <button
+            v-for="(w, idx) in WEATHER_PRESETS"
+            :key="w.id"
+            type="button"
+            @click="selectWeatherPreset(idx)"
+            :disabled="lookbookStore.loading || weatherBusyKey !== null"
+            class="px-2.5 py-1 rounded-full font-medium border transition inline-flex items-center gap-1 disabled:opacity-55 disabled:cursor-not-allowed"
+            :class="
+              !wardrobeStore.usingLiveWeather && wardrobeStore.weatherPresetIdx === idx
+                ? 'bg-black border-black text-white'
+                : 'bg-[#FAFAFA] border-black/[0.08] text-[#555555] hover:border-black/30'
+            "
+          >
+            <AppIcon :name="w.icon" :size="12" />
+            {{ w.label }} <span class="font-mono">{{ w.temp }}°C</span>
+          </button>
+        </div>
+
+        <button
+          type="button"
+          @click="generateWeatherLook"
+          :disabled="lookbookStore.loading"
+          class="px-5 py-2 rounded-full bg-black hover:bg-[#262626] text-white text-[12.5px] font-medium transition shrink-0 inline-flex items-center justify-center gap-1.5 disabled:opacity-55 disabled:cursor-not-allowed"
+        >
+          <AppIcon v-if="activeTriggerBusy === 'weather'" name="loader" :size="13" class="animate-spin" />
+          <AppIcon v-else name="sparkles" :size="13" />
+          {{ activeTriggerBusy === 'weather' ? '生成中…' : '按此天气生成搭配' }}
+        </button>
+      </div>
+
       <!-- Mode 2: Natural Language Input (Only shown when selected) -->
       <div v-if="lookbookStore.triggerMode === 'nl'" class="space-y-2 pt-2.5 border-t border-black/[0.06]">
         <div class="flex flex-col sm:flex-row gap-2">
@@ -446,10 +493,10 @@ async function handleRecordToday() {
         </div>
       </div>
 
-      <!-- Mode 3: Anchor Item Selector (Only shown when selected) -->
+      <!-- Mode 3: Anchor Item Selector (Pick item first, then explicitly generate) -->
       <div v-if="lookbookStore.triggerMode === 'anchor'" class="flex flex-wrap items-center justify-between gap-2.5 pt-2.5 border-t border-black/[0.06]">
-        <div class="flex items-center gap-2.5">
-          <span class="text-[12px] text-[#666666]">围绕单品</span>
+        <div class="flex flex-wrap items-center gap-2.5">
+          <span class="text-[12px] text-[#666666]">围绕核心单品</span>
           <div
             v-if="anchorItem"
             class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#F5F5F5] border border-black/15"
@@ -460,58 +507,33 @@ async function handleRecordToday() {
             <span class="text-[12.5px] font-medium text-black">{{ anchorItem.name }}</span>
           </div>
           <span v-else class="text-[12px] text-[#666666]">请先录入衣物</span>
+          <select
+            v-if="wardrobeStore.items.length > 0"
+            :value="anchorItem?.id || ''"
+            :disabled="lookbookStore.loading"
+            @change="selectAnchorDraft(Number(($event.target as HTMLSelectElement).value))"
+            class="px-3 py-1.5 rounded-full bg-[#FAFAFA] border border-black/[0.08] text-[12px] text-black outline-none disabled:opacity-55"
+          >
+            <option v-for="item in wardrobeStore.items" :key="item.id" :value="item.id">
+              {{ item.name }} ({{ categoryLabel(item.category) }})
+            </option>
+          </select>
         </div>
-        <select
-          v-if="wardrobeStore.items.length > 0"
-          :value="lookbookStore.anchorItemId"
-          :disabled="lookbookStore.loading"
-          @change="changeAnchorById(Number(($event.target as HTMLSelectElement).value))"
-          class="px-3 py-1.5 rounded-full bg-[#FAFAFA] border border-black/[0.08] text-[12px] text-black outline-none disabled:opacity-55"
+
+        <button
+          type="button"
+          @click="generateAnchorLook"
+          :disabled="lookbookStore.loading || !anchorItem"
+          class="px-5 py-2 rounded-full bg-black hover:bg-[#262626] text-white text-[12.5px] font-medium transition shrink-0 inline-flex items-center justify-center gap-1.5 disabled:opacity-55 disabled:cursor-not-allowed"
         >
-          <option v-for="item in wardrobeStore.items" :key="item.id" :value="item.id">
-            {{ item.name }} ({{ categoryLabel(item.category) }})
-          </option>
-        </select>
+          <AppIcon v-if="activeTriggerBusy === 'anchor'" name="loader" :size="13" class="animate-spin" />
+          <AppIcon v-else name="pin" :size="13" />
+          {{ activeTriggerBusy === 'anchor' ? '生成中…' : '围绕它生成搭配' }}
+        </button>
       </div>
 
-      <!-- Collapsible Advanced Settings (Weather Simulation, Revive Idle, Budget) -->
+      <!-- Collapsible Advanced Settings (Revive Idle & Missing-Item Budget) -->
       <div v-if="settingsOpen" class="pt-3 border-t border-black/[0.06] space-y-3 text-[12px]">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[#666666] mr-1">天气来源</span>
-          <button
-            type="button"
-            @click="selectLiveWeather"
-            :disabled="lookbookStore.loading || weatherBusyKey !== null"
-            class="px-3 py-1 rounded-full font-medium border transition inline-flex items-center gap-1.5 disabled:opacity-55 disabled:cursor-not-allowed"
-            :class="
-              wardrobeStore.usingLiveWeather
-                ? 'bg-black border-black text-white'
-                : 'bg-white border-black/[0.08] text-[#333333] hover:bg-[#F5F5F5]'
-            "
-          >
-            <AppIcon v-if="weatherBusyKey === 'live'" name="loader" :size="12" class="animate-spin" />
-            <span v-else class="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            {{ wardrobeStore.liveWeather.city }} 实时 {{ wardrobeStore.liveWeather.temp }}°C
-          </button>
-          <button
-            v-for="(w, idx) in WEATHER_PRESETS"
-            :key="w.id"
-            type="button"
-            @click="selectWeatherPreset(idx)"
-            :disabled="lookbookStore.loading || weatherBusyKey !== null"
-            class="px-3 py-1 rounded-full font-medium border transition inline-flex items-center gap-1 disabled:opacity-55 disabled:cursor-not-allowed"
-            :class="
-              !wardrobeStore.usingLiveWeather && wardrobeStore.weatherPresetIdx === idx
-                ? 'bg-[#F2F2F2] border-black text-black'
-                : 'bg-[#FAFAFA] border-black/[0.08] text-[#555555] hover:bg-[#F5F5F5]'
-            "
-          >
-            <AppIcon v-if="weatherBusyKey === `preset-${idx}`" name="loader" :size="12" class="animate-spin" />
-            <AppIcon v-else :name="w.icon" :size="13" />
-            {{ w.label }} <span class="font-mono">{{ w.temp }}°C</span>
-          </button>
-        </div>
-
         <div class="flex flex-wrap items-center justify-between gap-3">
           <button
             type="button"
@@ -630,28 +652,44 @@ async function handleRecordToday() {
                 ]"
               >
                 <div class="flex items-center justify-between gap-1">
-                  <span
-                    class="text-[10.5px] font-medium px-2 py-0.5 rounded-full"
-                    :class="
-                      slot.anchor
-                        ? 'bg-black text-white'
-                        : slot.missing
-                          ? 'bg-white border border-black/15 text-black'
-                          : 'bg-white text-[#666666]'
-                    "
-                  >
-                    {{ slot.anchor ? '核心锚点' : slot.missing ? '建议补全' : slot.slotLabel }}
-                  </span>
                   <button
-                    v-if="!slot.anchor"
+                    v-if="slot.anchor"
                     type="button"
-                    @click="handleSwapSlot(slot.slotKey, slot.item.id)"
-                    :disabled="swappingSlotKey !== null || lookbookStore.loading"
-                    title="换一件同品类"
-                    class="w-7 h-7 rounded-full bg-white hover:bg-black hover:text-white text-[#333333] flex items-center justify-center transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    @click="handleToggleSlotLock(slot.item)"
+                    title="点击取消锁定，取消后可换一件"
+                    class="inline-flex items-center gap-1 text-[10.5px] font-medium px-2.5 py-0.5 rounded-full bg-black text-white hover:bg-[#262626] transition"
                   >
-                    <AppIcon name="refresh" :size="12" :class="swappingSlotKey === slot.slotKey ? 'animate-spin' : ''" />
+                    <AppIcon name="pin" :size="10" />
+                    已锁定 ×
                   </button>
+                  <span
+                    v-else
+                    class="text-[10.5px] font-medium px-2 py-0.5 rounded-full"
+                    :class="slot.missing ? 'bg-white border border-black/15 text-black' : 'bg-white text-[#666666]'"
+                  >
+                    {{ slot.missing ? '建议补全' : slot.slotLabel }}
+                  </span>
+                  <div v-if="!slot.missing" class="flex items-center gap-1">
+                    <button
+                      v-if="!slot.anchor"
+                      type="button"
+                      @click="handleToggleSlotLock(slot.item)"
+                      title="锁定此单品，微调时保留"
+                      class="w-7 h-7 rounded-full bg-white hover:bg-black hover:text-white text-[#666666] flex items-center justify-center transition shadow-xs"
+                    >
+                      <AppIcon name="pin" :size="11" />
+                    </button>
+                    <button
+                      v-if="!slot.anchor"
+                      type="button"
+                      @click="handleSwapSlot(slot.slotKey, slot.item.id)"
+                      :disabled="swappingSlotKey !== null || lookbookStore.loading"
+                      title="换一件同品类"
+                      class="w-7 h-7 rounded-full bg-white hover:bg-black hover:text-white text-[#333333] flex items-center justify-center transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <AppIcon name="refresh" :size="12" :class="swappingSlotKey === slot.slotKey ? 'animate-spin' : ''" />
+                    </button>
+                  </div>
                 </div>
                 <div class="my-2 flex-1 flex items-center justify-center min-h-[100px]">
                   <GarmentVisual
@@ -788,19 +826,35 @@ async function handleRecordToday() {
                 看同款
               </button>
               <button
-                v-else-if="!slot.anchor"
+                v-else-if="slot.anchor"
                 type="button"
-                @click.stop="handleSwapSlot(slot.slotKey, slot.item.id)"
-                :disabled="swappingSlotKey !== null || lookbookStore.loading"
-                title="换一件同品类"
-                class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white hover:bg-black hover:text-white border border-black/[0.1] text-[11px] text-black transition disabled:opacity-50 disabled:cursor-not-allowed"
+                @click.stop="handleToggleSlotLock(slot.item)"
+                title="点击取消锁定，取消后可换一件"
+                class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-black hover:bg-[#262626] text-white text-[11px] font-medium transition"
               >
-                <AppIcon name="refresh" :size="11" :class="swappingSlotKey === slot.slotKey ? 'animate-spin' : ''" />
-                {{ swappingSlotKey === slot.slotKey ? '替换中…' : '换一件' }}
+                <AppIcon name="pin" :size="10" />
+                已锁定 ×
               </button>
-              <span v-else class="shrink-0 px-2 py-0.5 rounded-full bg-black text-white text-[10.5px]">
-                锚点
-              </span>
+              <div v-else class="shrink-0 flex items-center gap-1">
+                <button
+                  type="button"
+                  @click.stop="handleToggleSlotLock(slot.item)"
+                  title="锁定此单品，微调时保留"
+                  class="w-7 h-7 rounded-full bg-white hover:bg-black hover:text-white border border-black/[0.1] text-[#666666] flex items-center justify-center transition"
+                >
+                  <AppIcon name="pin" :size="11" />
+                </button>
+                <button
+                  type="button"
+                  @click.stop="handleSwapSlot(slot.slotKey, slot.item.id)"
+                  :disabled="swappingSlotKey !== null || lookbookStore.loading"
+                  title="换一件同品类"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white hover:bg-black hover:text-white border border-black/[0.1] text-[11px] text-black transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <AppIcon name="refresh" :size="11" :class="swappingSlotKey === slot.slotKey ? 'animate-spin' : ''" />
+                  {{ swappingSlotKey === slot.slotKey ? '替换中…' : '换一件' }}
+                </button>
+              </div>
             </div>
           </div>
 
